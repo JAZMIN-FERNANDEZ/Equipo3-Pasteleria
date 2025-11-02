@@ -1,0 +1,194 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model attribute_options {
+  id_opcion            Int                    @id @default(autoincrement())
+  id_atributo          Int
+  nombreopcion         String                 @db.VarChar(50)
+  ajusteprecio         Decimal                @default(0) @db.Decimal(10, 2)
+  activo               Boolean?               @default(true)
+  product_attributes   product_attributes     @relation(fields: [id_atributo], references: [id_atributo], onDelete: NoAction, onUpdate: NoAction, map: "fk_ao_pa")
+  orderitem_attributes orderitem_attributes[]
+}
+
+model bitacoracambios {
+  id_bitacora         BigInt   @id @default(autoincrement())
+  tablaafectada       String   @db.VarChar(100)
+  id_registroafectado String?  @db.VarChar(50)
+  accion              String   @db.VarChar(10)
+  datosanteriores     Json?
+  datosnuevos         Json?
+  fechahora           DateTime @default(now()) @db.Timestamptz(6)
+  id_usuario          Int
+  usuarios            usuarios @relation(fields: [id_usuario], references: [id_usuario], onDelete: NoAction, onUpdate: NoAction, map: "fk_bitacora_usuarios")
+}
+
+model categorias {
+  id_categoria    Int         @id @default(autoincrement())
+  nombrecategoria String      @unique @db.VarChar(100)
+  activo          Boolean?    @default(true)
+  productos       productos[]
+}
+
+model cliente_recompensas {
+  id_clienterecompensa Int         @id @default(autoincrement())
+  id_cliente           Int
+  id_recompensa        Int
+  fechaobtencion       DateTime?   @default(now()) @db.Timestamptz(6)
+  estado               String      @db.VarChar(50)
+  activo               Boolean?    @default(true)
+  clientes             clientes    @relation(fields: [id_cliente], references: [id_cliente], onDelete: NoAction, onUpdate: NoAction, map: "fk_cr_clientes")
+  recompensas          recompensas @relation(fields: [id_recompensa], references: [id_recompensa], onDelete: NoAction, onUpdate: NoAction, map: "fk_cr_recompensas")
+}
+
+model clientes {
+  id_cliente          Int                   @id @default(autoincrement())
+  id_usuario          Int                   @unique
+  nombre              String                @db.VarChar(100)
+  telefono            String?               @db.VarChar(20)
+  fecharegistro       DateTime?             @default(now()) @db.Timestamptz(6)
+  activo              Boolean?              @default(true)
+  cliente_recompensas cliente_recompensas[]
+  usuarios            usuarios              @relation(fields: [id_usuario], references: [id_usuario], onDelete: NoAction, onUpdate: NoAction, map: "fk_clientes_usuarios")
+  pedidos             pedidos[]
+}
+
+model detalle_pedido {
+  id_detallepedido     Int                    @id @default(autoincrement())
+  id_pedido            Int
+  id_producto          Int
+  cantidad             Int
+  preciounitario       Decimal                @db.Decimal(10, 2)
+  activo               Boolean?               @default(true)
+  pedidos              pedidos                @relation(fields: [id_pedido], references: [id_pedido], onDelete: NoAction, onUpdate: NoAction, map: "fk_dp_pedidos")
+  productos            productos              @relation(fields: [id_producto], references: [id_producto], onDelete: NoAction, onUpdate: NoAction, map: "fk_dp_productos")
+  orderitem_attributes orderitem_attributes[]
+}
+
+model empleados {
+  id_empleado    Int       @id @default(autoincrement())
+  id_usuario     Int       @unique
+  nombrecompleto String    @db.VarChar(100)
+  turno          String?   @db.VarChar(50)
+  activo         Boolean?  @default(true)
+  usuarios       usuarios  @relation(fields: [id_usuario], references: [id_usuario], onDelete: NoAction, onUpdate: NoAction, map: "fk_empleados_usuarios")
+  pedidos        pedidos[]
+}
+
+model ingredientes {
+  id_ingrediente      Int                   @id @default(autoincrement())
+  sku                 String                @unique @db.VarChar(50)
+  nombre              String                @db.VarChar(100)
+  stockactual         Decimal               @db.Decimal(10, 2)
+  stockminimo         Decimal               @db.Decimal(10, 2)
+  unidadmedida        String                @db.VarChar(20)
+  id_proveedor        Int?
+  activo              Boolean?              @default(true)
+  proveedores         proveedores?          @relation(fields: [id_proveedor], references: [id_proveedor], onDelete: NoAction, onUpdate: NoAction, map: "fk_ingredientes_proveedores")
+  product_ingredients product_ingredients[]
+}
+
+model orderitem_attributes {
+  id_detallepedido  Int
+  id_opcion         Int
+  activo            Boolean?          @default(true)
+  attribute_options attribute_options @relation(fields: [id_opcion], references: [id_opcion], onDelete: NoAction, onUpdate: NoAction, map: "fk_oia_ao")
+  detalle_pedido    detalle_pedido    @relation(fields: [id_detallepedido], references: [id_detallepedido], onDelete: NoAction, onUpdate: NoAction, map: "fk_oia_dp")
+
+  @@id([id_detallepedido, id_opcion])
+}
+
+model pedidos {
+  id_pedido      Int              @id @default(autoincrement())
+  id_cliente     Int
+  id_empleado    Int?
+  fechapedido    DateTime?        @default(now()) @db.Timestamptz(6)
+  total          Decimal          @db.Decimal(10, 2)
+  estado         String           @db.VarChar(50)
+  activo         Boolean?         @default(true)
+  detalle_pedido detalle_pedido[]
+  clientes       clientes         @relation(fields: [id_cliente], references: [id_cliente], onDelete: NoAction, onUpdate: NoAction, map: "fk_pedidos_clientes")
+  empleados      empleados?       @relation(fields: [id_empleado], references: [id_empleado], onDelete: NoAction, onUpdate: NoAction, map: "fk_pedidos_empleados")
+}
+
+model product_attributes {
+  id_atributo       Int                 @id @default(autoincrement())
+  nombreatributo    String              @unique @db.VarChar(50)
+  activo            Boolean?            @default(true)
+  attribute_options attribute_options[]
+}
+
+model product_ingredients {
+  id_producto       Int
+  id_ingrediente    Int
+  cantidadrequerida Decimal      @db.Decimal(10, 2)
+  activo            Boolean?     @default(true)
+  ingredientes      ingredientes @relation(fields: [id_ingrediente], references: [id_ingrediente], onDelete: NoAction, onUpdate: NoAction, map: "fk_pi_ingredientes")
+  productos         productos    @relation(fields: [id_producto], references: [id_producto], onDelete: NoAction, onUpdate: NoAction, map: "fk_pi_productos")
+
+  @@id([id_producto, id_ingrediente])
+}
+
+model productos {
+  id_producto              Int                   @id @default(autoincrement())
+  sku                      String                @unique @db.VarChar(50)
+  nombre                   String                @db.VarChar(100)
+  descripcion              String?
+  preciobase               Decimal               @db.Decimal(10, 2)
+  id_categoria             Int
+  stockproductosterminados Int?                  @default(0)
+  activo                   Boolean?              @default(true)
+  imagenurl                String?               @db.VarChar(255)
+  detalle_pedido           detalle_pedido[]
+  product_ingredients      product_ingredients[]
+  categorias               categorias            @relation(fields: [id_categoria], references: [id_categoria], onDelete: NoAction, onUpdate: NoAction, map: "fk_productos_categorias")
+}
+
+model proveedores {
+  id_proveedor Int            @id @default(autoincrement())
+  nombre       String         @db.VarChar(100)
+  contacto     String?        @db.VarChar(100)
+  telefono     String?        @db.VarChar(20)
+  rfc          String?        @unique @db.VarChar(13)
+  activo       Boolean?       @default(true)
+  ingredientes ingredientes[]
+}
+
+model recompensas {
+  id_recompensa       Int                   @id @default(autoincrement())
+  nombrerecompensa    String                @db.VarChar(100)
+  descripcion         String?
+  tipo                String?               @db.VarChar(50)
+  valor               Decimal?              @db.Decimal(10, 2)
+  puntosrequeridos    Int?
+  activo              Boolean?              @default(true)
+  cliente_recompensas cliente_recompensas[]
+}
+
+model roles {
+  id_rol      Int        @id @default(autoincrement())
+  nombrerol   String     @unique @db.VarChar(50)
+  descripcion String?
+  activo      Boolean?   @default(true)
+  usuarios    usuarios[]
+}
+
+model usuarios {
+  id_usuario        Int               @id @default(autoincrement())
+  correoelectronico String            @unique @db.VarChar(100)
+  contrasena        String            @db.VarChar(255)
+  id_rol            Int
+  fechacreacion     DateTime?         @default(now()) @db.Timestamptz(6)
+  activo            Boolean?          @default(true)
+  bitacoracambios   bitacoracambios[]
+  clientes          clientes?
+  empleados         empleados?
+  roles             roles             @relation(fields: [id_rol], references: [id_rol], onDelete: NoAction, onUpdate: NoAction, map: "fk_usuarios_roles")
+}
