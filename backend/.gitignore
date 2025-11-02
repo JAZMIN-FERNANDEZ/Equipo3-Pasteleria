@@ -1,0 +1,17 @@
+node_modules
+# Keep environment variables out of version control
+.env
+.env.local
+.env.development
+.env.production
+
+# Dependencias (Estas se instalan con 'npm install')
+node_modules/
+
+# Archivos de build (Se generan con 'npm run build')
+dist/
+build/
+
+# Logs de NPM
+npm-debug.log
+/generated/prisma
