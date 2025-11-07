@@ -146,6 +146,7 @@ model productos {
   stockproductosterminados Int?                  @default(0)
   activo                   Boolean?              @default(true)
   imagenurl                String?               @db.VarChar(255)
+  carrito_items            carrito_items[]
   detalle_pedido           detalle_pedido[]
   product_ingredients      product_ingredients[]
   categorias               categorias            @relation(fields: [id_categoria], references: [id_categoria], onDelete: NoAction, onUpdate: NoAction, map: "fk_productos_categorias")
@@ -188,7 +189,19 @@ model usuarios {
   fechacreacion     DateTime?         @default(now()) @db.Timestamptz(6)
   activo            Boolean?          @default(true)
   bitacoracambios   bitacoracambios[]
+  carrito_items     carrito_items[]
   clientes          clientes?
   empleados         empleados?
   roles             roles             @relation(fields: [id_rol], references: [id_rol], onDelete: NoAction, onUpdate: NoAction, map: "fk_usuarios_roles")
+}
+
+model carrito_items {
+  id_item_carrito Int       @id @default(autoincrement())
+  id_usuario      Int
+  id_producto     Int
+  cantidad        Int
+  personalizacion Json?
+  fechaagregado   DateTime? @default(now()) @db.Timestamptz(6)
+  productos       productos @relation(fields: [id_producto], references: [id_producto], onDelete: NoAction, onUpdate: NoAction, map: "fk_carrito_producto")
+  usuarios        usuarios  @relation(fields: [id_usuario], references: [id_usuario], onDelete: NoAction, onUpdate: NoAction, map: "fk_carrito_usuario")
 }
