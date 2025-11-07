@@ -1,62 +1,80 @@
-// src/context/CartContext.jsx
-
-import React, { createContext, useContext, useState, useMemo, useEffect } from 'react';
-// 1. IMPORTA EL HOOK DE AUTENTICACIÓN
+import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { useAuth } from './AuthContext';
+import apiClient from '../api';
 
-// 2. Crear el Contexto
 const CartContext = createContext();
 
-// 3. Crear el Proveedor (el componente que envuelve la app)
 export function CartProvider({ children }) {
   const [cartItems, setCartItems] = useState([]);
-  
-  // 4. "ESCUCHA" AL CONTEXTO DE AUTENTICACIÓN
-  const { user } = useAuth();
+  const [loading, setLoading] = useState(false);
+  const { user } = useAuth(); 
 
-  // Función para AÑADIR un item al carrito
-  const addToCart = (productToAdd) => {
-    const newItem = { ...productToAdd, cartId: Date.now() };
-    setCartItems(prevItems => [...prevItems, newItem]);
-    alert('¡Producto añadido al carrito!');
-  };
-
-  // Función para QUITAR un item del carrito
-  const removeFromCart = (cartId) => {
-    setCartItems(prevItems => prevItems.filter(item => item.cartId !== cartId));
-  };
-
-  // Función para LIMPIAR el carrito
-  const clearCart = () => {
-    setCartItems([]);
-  };
-
-  // Calculamos el total
-  const total = useMemo(() => {
-    return cartItems.reduce((acc, item) => acc + item.subtotal, 0);
-  }, [cartItems]);
-
-
-  // 5. ESTE ES EL ARREGLO
-  // Este "efecto" se ejecuta cada vez que el 'user' cambia.
-  useEffect(() => {
-    // Si el 'user' se vuelve nulo (porque se cerró sesión),
-    // limpiamos el carrito.
-    if (!user) {
-      clearCart();
+  const fetchCart = useCallback(async () => {
+    // ... (esta función no cambia)
+    if (!user) return; 
+    setLoading(true);
+    try {
+      const response = await apiClient.get('/cart');
+      const formattedItems = response.data.map(item => ({
+        cartId: item.id_item_carrito,
+        productId: item.id_producto,
+        // OJO: Corregí un bug aquí, Prisma devuelve 'productos' (plural) no 'producto'
+        name: `${item.productos.nombre} (${Object.values(item.personalizacion).join(', ')})`,
+        quantity: item.cantidad,
+        price: parseFloat(item.productos.preciobase),
+        subtotal: parseFloat(item.productos.preciobase) * item.cantidad,
+      }));
+      setCartItems(formattedItems);
+    } catch (error) {
+      console.error("Error al cargar el carrito:", error);
+    } finally {
+      setLoading(false);
     }
-  }, [user]); // La dependencia [user] hace que se ejecute cuando 'user' cambia
+  }, [user]);
 
+  useEffect(() => {
+    if (user) {
+      fetchCart();
+    } else {
+      setCartItems([]); 
+    }
+  }, [user, fetchCart]);
 
-  // 6. Pasamos los valores (incluyendo clearCart por si se necesita)
+  // ========= 🛠️ MODIFICACIÓN AQUÍ =========
+  const addToCart = async (productToAdd) => {
+    try {
+      // 1. Hacemos que la función sea 'async' y 'await' la llamada
+      await apiClient.post('/cart', productToAdd);
+      
+      // 2. Refrescamos el carrito *antes* de terminar la función
+      await fetchCart(); 
+    } catch (error) {
+      console.error("Error al añadir al carrito:", error);
+      // 3. (Opcional) Lanza el error para que handleSubmit lo atrape
+      throw error; 
+    }
+  };
+  // ======================================
+
+  const removeFromCart = async (cartItemId) => {
+    // ... (esta función no cambia)
+    try {
+      await apiClient.delete(`/cart/${cartItemId}`);
+      await fetchCart();
+    } catch (error) {
+      console.error("Error al borrar del carrito:", error);
+    }
+  };
+
+  const total = cartItems.reduce((acc, item) => acc + item.subtotal, 0);
+
   return (
-    <CartContext.Provider value={{ cartItems, addToCart, removeFromCart, total, clearCart }}>
+    <CartContext.Provider value={{ cartItems, addToCart, removeFromCart, total, loading }}>
       {children}
     </CartContext.Provider>
   );
 }
 
-// 7. Hook personalizado para usar el contexto fácilmente
 export function useCart() {
   return useContext(CartContext);
 }
