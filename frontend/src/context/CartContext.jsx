@@ -32,6 +32,10 @@ export function CartProvider({ children }) {
     }
   }, [user]);
 
+  const clearLocalCart = () => {
+    setCartItems([]);
+  };
+
   useEffect(() => {
     if (user) {
       fetchCart();
@@ -69,11 +73,11 @@ export function CartProvider({ children }) {
   const total = cartItems.reduce((acc, item) => acc + item.subtotal, 0);
 
   return (
-    <CartContext.Provider value={{ cartItems, addToCart, removeFromCart, total, loading }}>
-      {children}
-    </CartContext.Provider>
-  );
-}
+      <CartContext.Provider value={{ cartItems, addToCart, removeFromCart, total, loading, clearLocalCart }}>
+        {children}
+      </CartContext.Provider>
+    );
+  }
 
 export function useCart() {
   return useContext(CartContext);

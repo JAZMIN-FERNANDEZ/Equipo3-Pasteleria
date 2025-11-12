@@ -19,7 +19,7 @@ const HeaderComponent = () => {
       { label: 'Cajeros', path: '/admin/cajeros', roles: ['admin', 'Administrador'] },
       { label: 'Proveedores', path: '/admin/proveedores', roles: ['admin', 'Administrador'] },
       { label: 'Carrito', path: '/cart', roles: ['empleado','cliente', 'Cliente', 'Cajero'] },
-      { label: 'Inventario', path: '/admin/inventario', roles: ['admin', 'Administrador'] },
+      { label: 'Inventario', path: '/admin/inventario', roles: ['empleado', 'admin', 'Administrador', 'Cajero'] },
       { label: 'Mis Pedidos', path: '/mis-pedidos', roles: ['cliente', 'Cliente'] },
       { label: 'Recompensas', path: '/admin/recompensas', roles: ['admin', 'Administrador'] },
       { label: 'Estadísticas', path: '/admin/dashboard', roles: ['admin', 'Administrador'] },

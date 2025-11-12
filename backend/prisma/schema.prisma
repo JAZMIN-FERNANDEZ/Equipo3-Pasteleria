@@ -67,6 +67,7 @@ model detalle_pedido {
   cantidad             Int
   preciounitario       Decimal                @db.Decimal(10, 2)
   activo               Boolean?               @default(true)
+  personalizacion      Json?
   pedidos              pedidos                @relation(fields: [id_pedido], references: [id_pedido], onDelete: NoAction, onUpdate: NoAction, map: "fk_dp_pedidos")
   productos            productos              @relation(fields: [id_producto], references: [id_producto], onDelete: NoAction, onUpdate: NoAction, map: "fk_dp_productos")
   orderitem_attributes orderitem_attributes[]
@@ -113,6 +114,8 @@ model pedidos {
   total          Decimal          @db.Decimal(10, 2)
   estado         String           @db.VarChar(50)
   activo         Boolean?         @default(true)
+  metodo_pago    String?          @db.VarChar(50)
+  monto_pago_con Decimal?         @db.Decimal(10, 2)
   detalle_pedido detalle_pedido[]
   clientes       clientes         @relation(fields: [id_cliente], references: [id_cliente], onDelete: NoAction, onUpdate: NoAction, map: "fk_pedidos_clientes")
   empleados      empleados?       @relation(fields: [id_empleado], references: [id_empleado], onDelete: NoAction, onUpdate: NoAction, map: "fk_pedidos_empleados")
