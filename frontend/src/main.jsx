@@ -1,5 +1,3 @@
-// src/main.jsx
-
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { createBrowserRouter, RouterProvider } from "react-router-dom";
@@ -15,7 +13,7 @@ import LoginPage from './pages/LoginPage';
 import RegisterPage from './pages/RegisterPage';
 import HomePage from './pages/HomePage';
 import CartPage from './pages/CartPage';
-import StadisticPage from './pages/StadisticPage';
+import GestionDashboardPage from './pages/GestionDashboardPage.jsx';
 import ProductDetailPage from './pages/ProductDetailPage';
 import OrderPage from './pages/MisPedidosPage';
 import InventoryAdminPage from './pages/InventoryAdminPage';
@@ -23,7 +21,9 @@ import GestionPedidosPage from './pages/GestionPedidosPage';
 import GestionProveedoresPage from './pages/GestionProveedoresPage';
 import GestionCajerosPage from './pages/GestionCajerosPage';
 import GestionRecompensasPage from './pages/GestionRecompensasPage';
-
+import CheckoutPage from './pages/CheckOutPage';
+import ConfirmationPage from './pages/ConfirmationPage';
+import CorteCajaPage from './pages/CorteCajaPage';
 
 const router = createBrowserRouter([
   // --- Rutas públicas (sin Header) ---
@@ -61,6 +61,7 @@ const router = createBrowserRouter([
         children: [
            { path: "mis-pedidos", element: <OrderPage /> },
            { path: "product/:id", element: <ProductDetailPage /> },
+           { path: "confirmation/:orderId", element: <ConfirmationPage /> },
         ]
       },
 
@@ -68,12 +69,10 @@ const router = createBrowserRouter([
       {
         element: <ProtectedRoute allowedRoles="Administrador" />, // <-- 3. GUARDIÁN DE ADMIN
         children: [
-          // { path: "admin/dashboard", element: <DashboardPage /> },
-          { path: "admin/inventario", element: <InventoryAdminPage /> },
           { path: "admin/proveedores", element: <GestionProveedoresPage /> },
           { path: "admin/cajeros", element: <GestionCajerosPage /> },
           { path: "admin/recompensas", element: <GestionRecompensasPage /> },
-          { path: "admin/dashboard", element: <StadisticPage /> }
+          { path: "admin/dashboard", element: <GestionDashboardPage /> }
         ]
       },
       
@@ -81,20 +80,23 @@ const router = createBrowserRouter([
       {
         element: <ProtectedRoute allowedRoles={['Administrador', 'Cajero']} />,
         children: [
-          { 
-            path: "/gestion/pedidos", 
-            element: <GestionPedidosPage /> 
-          }
+          { path: "/gestion/pedidos", element: <GestionPedidosPage /> },
+          { path: "/admin/inventario", element: <InventoryAdminPage /> },
+          { path: "/cierre", element: <CorteCajaPage /> }
         ]
       },
 
-      // --- Rutas de Cajero ---
+      // --- Rutas de Cliente y Cajero ---
+
       {
-        element: <ProtectedRoute allowedRole="Cajero" />, // <-- 4. GUARDIÁN DE CAJERO
+        element: <ProtectedRoute allowedRoles={['Cajero', 'Cliente']} />,
         children: [
-           { path: "cart", element: <CartPage /> },
+          { path: "product/:id", element: <ProductDetailPage /> },
+          { path: "cart", element: <CartPage /> },
+          { path: "checkout", element: <CheckoutPage /> }
         ]
       }
+
     ]
   }
 ]);

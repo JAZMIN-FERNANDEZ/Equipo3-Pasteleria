@@ -6,7 +6,8 @@ import multer from 'multer';
 import { PrismaClient } from './generated/prisma/index.js';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
-import { startOfMonth, endOfMonth } from 'date-fns';
+import { startOfMonth, endOfMonth, startOfWeek, endOfWeek } from 'date-fns';
+import { startOfDay, endOfDay, parseISO } from 'date-fns';
 
 
 const autenticarUsuario = (req, res, next) => {
@@ -88,7 +89,7 @@ app.use((req, res, next) => {
   - Aquí van todas las rutas que el frontend puede usar para interactuar con la bd chavales
  ================================================================================ */
 
-// 4. Crear la ruta de LOGIN (Primera funcionalidad)
+// ==================== RUTA de LOGIN ====================
 app.post('/api/auth/login', async (req, res) => {
   try {
     // Log 1: Ver qué llega del frontend
@@ -160,7 +161,64 @@ app.post('/api/auth/login', async (req, res) => {
   }
 });
 
+// ============ RUTA DE REGISTRO (PÚBLICA) =====
+// =============================================
+app.post('/api/auth/register', async (req, res) => {
+  // 1. Obtenemos los datos del formulario de React
+  const { nombre, telefono, correo, contrasena } = req.body;
 
+  // Validación simple
+  if (!nombre || !correo || !contrasena) {
+    return res.status(400).json({ error: 'Nombre, correo y contraseña son requeridos.' });
+  }
+
+  try {
+    // 2. Buscar el ID del rol 'Cliente'
+    const clienteRole = await prisma.roles.findUnique({
+      where: { nombrerol: 'Cliente' },
+      select: { id_rol: true }
+    });
+    if (!clienteRole) {
+      return res.status(500).json({ error: "Error de configuración: El rol 'Cliente' no existe." });
+    }
+
+    // 3. Hashear la contraseña
+    const hashedPassword = await bcrypt.hash(contrasena, 10);
+
+    // 4. Crear 'usuarios' y 'clientes' en una transacción
+    const nuevoCliente = await prisma.$transaction(async (tx) => {
+      // 4a. Crear el registro en 'usuarios'
+      const nuevoUsuario = await tx.usuarios.create({
+        data: {
+          correoelectronico: correo,
+          contrasena: hashedPassword,
+          id_rol: clienteRole.id_rol,
+        }
+      });
+
+      // 4b. Crear el registro en 'clientes' usando el ID del nuevo usuario
+      const nuevoCliente = await tx.clientes.create({
+        data: {
+          id_usuario: nuevoUsuario.id_usuario,
+          nombre: nombre,
+          telefono: telefono
+        }
+      });
+      return nuevoCliente;
+    });
+
+    // 5. Éxito
+    res.status(201).json({ message: 'Usuario registrado con éxito', id_cliente: nuevoCliente.id_cliente });
+
+  } catch (error) {
+    console.error("Error al registrar usuario:", error);
+    // Manejo de error de email duplicado
+    if (error.code === 'P2002' && error.meta?.target.includes('correoelectronico')) {
+      return res.status(409).json({ error: 'Este correo electrónico ya está en uso.' });
+    }
+    res.status(500).json({ error: 'Error interno del servidor' });
+  }
+});
 
 
 // ============ RUTAS DEL CARRITO ==============
@@ -327,53 +385,160 @@ app.get('/api/orders/my-history', autenticarUsuario, async (req, res) => {
   }
 });
 
+// ============ RUTA DE CHECKOUT (CREAR PEDIDO) ====================
+app.post('/api/orders', autenticarUsuario, async (req, res) => {
+  const idUsuario = req.usuario.id;
+  
+  // 1. Obtenemos los nuevos datos: 'estado' es opcional
+  const { metodoPago, montoPagoCon, total, estado } = req.body;
+  const idClienteSolicitante = req.body.idCliente; // ID del cliente (para el cajero)
+
+  try {
+    let clientePedidoId;
+
+    // 2. Determinar quién es el cliente del pedido
+    if (req.usuario.rol === 'Cliente') {
+      // Si el que compra es un Cliente, busca su propio ID de cliente
+      const cliente = await prisma.clientes.findUnique({
+        where: { id_usuario: idUsuario },
+        select: { id_cliente: true }
+      });
+      if (!cliente) throw new Error('Usuario no es un cliente válido.');
+      clientePedidoId = cliente.id_cliente;
+      
+    } else if (req.usuario.rol === 'Cajero') {
+      // Si es un Cajero, asumimos que es una VENTA EN MOSTRADOR
+      // y usamos un ID de cliente genérico (ej. ID 1 = "Venta Mostrador")
+      // O (mejor) el frontend debería poder seleccionar un cliente.
+      // Por ahora, usaremos un ID de cliente genérico (supongamos que el cliente con ID 1 es "Venta Mostrador")
+      clientePedidoId = idClienteSolicitante || 1; // TODO: Implementar selección de cliente en caja
+    }
+
+    // ... (Tu lógica de buscar items del carrito y validar stock sigue aquí)
+    const itemsDelCarrito = await prisma.carrito_items.findMany({
+      where: { id_usuario: idUsuario }, // El carrito sigue siendo el del cajero/cliente logueado
+      include: { productos: { select: { nombre: true, stockproductosterminados: true, preciobase: true } } }
+    });
+    if (itemsDelCarrito.length === 0) throw new Error('Tu carrito está vacío.');
+    
+    // ... (Tu lógica de $transaction para validar stock y descontar)
+    const BUFFER_EXHIBICION = 2;
+
+const nuevoPedido = await prisma.$transaction(async (tx) => {
+      
+      const cliente = await tx.clientes.findUnique({ /* ... */ });
+      if (!cliente) throw new Error('Usuario no es un cliente válido.');
+
+      const itemsDelCarrito = await tx.carrito_items.findMany({
+        where: { id_usuario: idUsuario },
+        include: { productos: { /* ... */ } }
+      });
+      if (itemsDelCarrito.length === 0) throw new Error('Tu carrito está vacío.');
+
+      const itemsParaDetalle = []; // Array para guardar los items del pedido
+      
+      for (const item of itemsDelCarrito) {
+        const producto = item.productos;
+        const stockDisponible = producto.stockproductosterminados - BUFFER_EXHIBICION;
+
+        if (item.cantidad > stockDisponible) {
+          throw new Error(`¡Stock insuficiente! El producto "${producto.nombre}"...`);
+        }
+
+        itemsParaDetalle.push({
+          id_producto: item.id_producto,
+          cantidad: item.cantidad,
+          preciounitario: parseFloat(producto.preciobase),
+          personalizacion: item.personalizacion
+        });
+        await tx.productos.update({
+          where: { id_producto: item.id_producto },
+          data: { stockproductosterminados: producto.stockproductosterminados - item.cantidad }
+        });
+      }
+
+      // 3. Lógica de Estado Modificada
+      const pedido = await tx.pedidos.create({
+        data: {
+          id_cliente: clientePedidoId,
+          id_empleado: req.usuario.rol === 'Cajero' ? (await tx.empleados.findUnique({where: {id_usuario: idUsuario}})).id_empleado : null,
+          total: total,
+          estado: estado || 'Pendiente', // Si no se envía 'estado', es 'Pendiente'
+          metodo_pago: metodoPago,
+          monto_pago_con: metodoPago === 'Efectivo' ? parseFloat(montoPagoCon) : null
+        }
+      });
+      
+      // ... (El resto de la transacción: crear detalle_pedido, borrar carrito_items)
+      await tx.detalle_pedido.createMany({
+        data: itemsParaDetalle.map(item => ({
+          ...item,
+          id_pedido: pedido.id_pedido 
+        }))
+      });
+
+      await tx.carrito_items.deleteMany({
+        where: { id_usuario: idUsuario }
+      });
+
+      return pedido;
+    });
+
+    res.status(201).json({ id_pedido: nuevoPedido.id_pedido, estado: nuevoPedido.estado });
+
+  } catch (error) {
+    console.error("Error al crear el pedido:", error);
+    res.status(400).json({ error: error.message || 'Error interno del servidor' });
+  }
+});
 
 
 // ============ RUTAS DE GESTIÓN DE PEDIDOS ====================
 // (Accesible por Admin y Cajero)
 
-// --- 1. OBTENER TODOS LOS PEDIDOS PENDIENTES ---
+// --- 1. OBTENER TODOS LOS PEDIDOS (MODIFICADO)
 app.get('/api/admin/orders', autenticarUsuario, esPersonalAutorizado(['Administrador', 'Cajero']), async (req, res) => {
   try {
+    const { status } = req.query; 
+
+    let statusFilter;
+    let orderByFilter;
+
+    if (status === 'completed') {
+      // 🛠️ CORRECCIÓN: Buscamos "Completado", no "Listo"
+      statusFilter = { in: ['Completado', 'Cancelado'] }; 
+      orderByFilter = { fechapedido: 'desc' }; 
+    } else {
+      statusFilter = { in: ['Pendiente', 'En preparación', 'Listo'] };
+      orderByFilter = { fechapedido: 'asc' }; 
+    } 
+    // 3. Usamos el filtro dinámico en la consulta
     const pedidos = await prisma.pedidos.findMany({
       where: {
         activo: true,
-        estado: {
-          // Solo traemos los que necesitan acción
-          in: ['Pendiente', 'En preparación'] 
-        }
+        estado: statusFilter // <-- 🛠️ FILTRO DINÁMICO
       },
       include: {
-        clientes: { // Para obtener el nombre del cliente
-          select: { nombre: true }
-        },
-        // Para simular la UI, traemos el primer producto del pedido
+        clientes: { select: { nombre: true } },
         detalle_pedido: {
           take: 1, 
-          include: {
-            productos: {
-              select: { nombre: true }
-            }
-          }
+          include: { productos: { select: { nombre: true } } }
         }
       },
-      orderBy: {
-        fechapedido: 'asc' // Los más antiguos primero
-      }
+      orderBy: orderByFilter // <-- 🛠️ ORDEN DINÁMICO
     });
 
-    // Reformateamos los datos para que coincidan con la UI
-    const pedidosFormateados = pedidos.map(p => {
-      const primerItem = p.detalle_pedido[0];
-      return {
-        id_pedido: p.id_pedido,
-        cliente: p.clientes.nombre,
-        producto: primerItem ? primerItem.productos.nombre : 'N/A',
-        cantidad: primerItem ? primerItem.cantidad : 0,
-        hora: new Date(p.fechapedido).toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' }),
-        estado: p.estado
-      };
-    });
+    const pedidosFormateados = pedidos.map(p => ({
+      id_pedido: p.id_pedido,
+      cliente: p.clientes.nombre,
+      producto: p.detalle_pedido[0] ? p.detalle_pedido[0].productos.nombre : 'N/A',
+      cantidad: p.detalle_pedido[0] ? p.detalle_pedido[0].cantidad : 0,
+      hora: new Date(p.fechapedido).toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' }),
+      estado: p.estado,
+      total: p.total,
+      metodo_pago: p.metodo_pago,
+      monto_pago_con: p.monto_pago_con
+    }));
 
     res.json(pedidosFormateados);
   } catch (error) {
@@ -382,7 +547,7 @@ app.get('/api/admin/orders', autenticarUsuario, esPersonalAutorizado(['Administr
   }
 });
 
-// --- 2. ACTUALIZAR EL ESTADO DE UN PEDIDO ---
+// --- 2. ACTUALIZAR EL ESTADO DE UN PEDIDO 
 app.put('/api/admin/orders/:id/status', autenticarUsuario, esPersonalAutorizado(['Administrador', 'Cajero']), async (req, res) => {
   try {
     const { id } = req.params;
@@ -405,21 +570,18 @@ app.put('/api/admin/orders/:id/status', autenticarUsuario, esPersonalAutorizado(
 });
 
 
-// ============ RUTAS DE INVENTARIO (ADMIN) ======================
-// ----- 1. OBTENER TODOS LOS PRODUCTOS -----
+// ============ RUTAS DE INVENTARIO (ADMIN) ===============
+//=========================================================
+
 app.post('/api/admin/products', autenticarUsuario, esAdmin, upload.single('imagen'), async (req, res) => {
   try {
-    //  CORRECCIÓN 1: 
     const { nombre, sku, descripcion, precioBase, id_categoria, stockproductosterminados } = req.body;
 
-    // req.file contiene la información de la imagen subida por multer
     if (!req.file) {
       return res.status(400).json({ error: 'La imagen es requerida' });
     }
-
     const imagenURL = `/uploads/${req.file.filename}`;
 
-    //
     const nuevoProducto = await prisma.productos.create({
       data: {
         sku: sku,
@@ -427,75 +589,71 @@ app.post('/api/admin/products', autenticarUsuario, esAdmin, upload.single('image
         descripcion: descripcion,
         preciobase: parseFloat(precioBase),
         id_categoria: parseInt(id_categoria),
-        stockproductosterminados: parseInt(stockproductosterminados), 
-        imagenurl: imagenURL // 
+        stockproductosterminados: parseInt(stockproductosterminados),
+        imagenurl: imagenURL
       }
     });
-
     res.status(201).json(nuevoProducto);
-
   } catch (error) {
     console.error("Error al crear producto:", error);
     res.status(500).json({ error: 'Error interno del servidor' });
   }
 });
+
+// 2. ACTUALIZAR UN PRODUCTO
 app.put('/api/admin/products/:id', autenticarUsuario, esAdmin, upload.single('imagen'), async (req, res) => {
   try {
     const { id } = req.params;
-    // OJO: Los datos de un FormData vienen como strings
-    const { sku, nombre, descripcion, precioBase, id_categoria, stockProductosTerminados } = req.body;
+    const { sku, nombre, descripcion, precioBase, id_categoria, stockproductosterminados } = req.body;
 
-    // 1. Prepara los datos a actualizar
     const dataToUpdate = {
-      sku,
-      nombre,
-      descripcion,
+      sku: sku,
+      nombre: nombre,
+      descripcion: descripcion,
       preciobase: parseFloat(precioBase),
       id_categoria: parseInt(id_categoria),
-      stockproductosterminados: parseInt(stockProductosTerminados)
+      stockproductosterminados: parseInt(stockproductosterminados)
     };
 
-    // 2. Si se subió una NUEVA imagen, añade su URL
     if (req.file) {
       dataToUpdate.imagenurl = `/uploads/${req.file.filename}`;
-      // (Opcional: Aquí podrías borrar la imagen antigua del disco duro)
     }
 
-    // 3. Ejecuta la actualización
     const productoActualizado = await prisma.productos.update({
       where: { id_producto: parseInt(id) },
       data: dataToUpdate
     });
-
     res.json(productoActualizado);
   } catch (error) {
     console.error("Error al actualizar producto:", error);
     res.status(500).json({ error: 'Error interno del servidor' });
   }
 });
-// --- 4. ELIMINAR (DESACTIVAR) UN PRODUCTO ---
+
+// 3. ELIMINAR (DESACTIVAR) UN PRODUCTO
 app.delete('/api/admin/products/:id', autenticarUsuario, esAdmin, async (req, res) => {
   try {
     const { id } = req.params;
-    
-    // Usamos 'update' para un borrado lógico (soft delete)
     await prisma.productos.update({
       where: { id_producto: parseInt(id) },
       data: { activo: false }
     });
-    
-    res.status(204).send(); // Éxito, sin contenido
+    res.status(204).send();
   } catch (error) {
     console.error("Error al eliminar producto:", error);
     res.status(500).json({ error: 'Error interno del servidor' });
   }
 });
-// --- 2. OBTENER TODOS LOS INGREDIENTES ---
-app.get('/api/admin/ingredients', autenticarUsuario, esAdmin, async (req, res) => {
+
+
+// ============ INGREDIENTES (ADMIN) ===============
+//=========================================================
+// A. OBTENER TODOS LOS INGREDIENTES
+app.get('/api/admin/ingredients', autenticarUsuario, esPersonalAutorizado(['Administrador', 'Cajero']), async (req, res) => {
   try {
     const ingredientes = await prisma.ingredientes.findMany({
       where: { activo: true },
-      // include: { proveedores: true } // Opcional: para mostrar el nombre del proveedor
+      // include: { proveedores: true } // Opcional
     });
     res.json(ingredientes);
   } catch (error) {
@@ -504,7 +662,7 @@ app.get('/api/admin/ingredients', autenticarUsuario, esAdmin, async (req, res) =
   }
 });
 
-// --- 2. CREAR UN NUEVO INGREDIENTE ---
+// B. CREAR UN NUEVO INGREDIENTE
 app.post('/api/admin/ingredients', autenticarUsuario, esAdmin, async (req, res) => {
   try {
     const { sku, nombre, stockactual, stockminimo, unidadmedida, id_proveedor } = req.body;
@@ -526,7 +684,7 @@ app.post('/api/admin/ingredients', autenticarUsuario, esAdmin, async (req, res) 
   }
 });
 
-// --- 3. ACTUALIZAR UN INGREDIENTE ---
+// C. ACTUALIZAR UN INGREDIENTE
 app.put('/api/admin/ingredients/:id', autenticarUsuario, esAdmin, async (req, res) => {
   try {
     const { id } = req.params;
@@ -550,25 +708,25 @@ app.put('/api/admin/ingredients/:id', autenticarUsuario, esAdmin, async (req, re
   }
 });
 
-// --- 4. ELIMINAR (DESACTIVAR) UN INGREDIENTE ---
+// D. ELIMINAR (DESACTIVAR) UN INGREDIENTE
 app.delete('/api/admin/ingredients/:id', autenticarUsuario, esAdmin, async (req, res) => {
   try {
     const { id } = req.params;
-    // Usamos 'update' para un borrado lógico (soft delete)
     await prisma.ingredientes.update({
       where: { id_ingrediente: parseInt(id) },
       data: { activo: false }
     });
-    res.status(204).send(); // Éxito, sin contenido
+    res.status(204).send();
   } catch (error) {
     console.error("Error al eliminar ingrediente:", error);
     res.status(500).json({ error: 'Error interno del servidor' });
   }
 });
 
-// ============ RUTAS DE PROVEEDORES (ADMIN) ===============
 
-// --- 1. OBTENER TODOS LOS PROVEEDORES ---
+// ============ RUTAS DE PROVEEDORES (ADMIN) ===============
+//==========================================================
+// A. OBTENER TODOS LOS PROVEEDORES 
 app.get('/api/admin/suppliers', autenticarUsuario, esAdmin, async (req, res) => {
   try {
     const proveedores = await prisma.proveedores.findMany({
@@ -582,7 +740,7 @@ app.get('/api/admin/suppliers', autenticarUsuario, esAdmin, async (req, res) => 
   }
 });
 
-// --- 2. CREAR UN NUEVO PROVEEDOR ---
+// B. CREAR UN NUEVO PROVEEDOR 
 app.post('/api/admin/suppliers', autenticarUsuario, esAdmin, async (req, res) => {
   try {
     // Obtenemos los datos del body. Todos son strings.
@@ -603,7 +761,7 @@ app.post('/api/admin/suppliers', autenticarUsuario, esAdmin, async (req, res) =>
   }
 });
 
-// --- 3. ACTUALIZAR UN PROVEEDOR ---
+// C. ACTUALIZAR UN PROVEEDOR 
 app.put('/api/admin/suppliers/:id', autenticarUsuario, esAdmin, async (req, res) => {
   try {
     const { id } = req.params;
@@ -625,7 +783,7 @@ app.put('/api/admin/suppliers/:id', autenticarUsuario, esAdmin, async (req, res)
   }
 });
 
-// --- 4. ELIMINAR (DESACTIVAR) UN PROVEEDOR ---
+// D. ELIMINAR (DESACTIVAR) UN PROVEEDOR
 app.delete('/api/admin/suppliers/:id', autenticarUsuario, esAdmin, async (req, res) => {
   try {
     const { id } = req.params;
@@ -641,8 +799,8 @@ app.delete('/api/admin/suppliers/:id', autenticarUsuario, esAdmin, async (req, r
 });
 
 // ============ RUTAS DE CAJEROS (ADMIN) ===========
-
-// --- 1. OBTENER TODOS LOS CAJEROS ---
+//==================================================
+// A. OBTENER TODOS LOS CAJEROS 
 app.get('/api/admin/cashiers', autenticarUsuario, esAdmin, async (req, res) => {
   try {
     const cajeros = await prisma.empleados.findMany({
@@ -669,7 +827,7 @@ app.get('/api/admin/cashiers', autenticarUsuario, esAdmin, async (req, res) => {
   }
 });
 
-// --- 2. CREAR UN NUEVO CAJERO (Con Transacción) ---
+// B. CREAR UN NUEVO CAJERO 
 app.post('/api/admin/cashiers', autenticarUsuario, esAdmin, async (req, res) => {
   // Nota: Faltan 'usuario' y 'telefono' porque no están en el schema.prisma
   const { nombrecompleto, correoelectronico, contrasena, turno } = req.body;
@@ -722,8 +880,7 @@ app.post('/api/admin/cashiers', autenticarUsuario, esAdmin, async (req, res) => 
   }
 });
 
-// --- 3. ACTUALIZAR UN CAJERO ---
-// (Nota: No implementamos cambio de contraseña por simplicidad)
+// C. ACTUALIZAR UN CAJERO
 app.put('/api/admin/cashiers/:id', autenticarUsuario, esAdmin, async (req, res) => {
   try {
     const { id: idEmpleado } = req.params;
@@ -755,7 +912,7 @@ app.put('/api/admin/cashiers/:id', autenticarUsuario, esAdmin, async (req, res) 
   }
 });
 
-// --- 4. ELIMINAR (DESACTIVAR) UN CAJERO ---
+// D. ELIMINAR (DESACTIVAR) UN CAJERO 
 app.delete('/api/admin/cashiers/:id', autenticarUsuario, esAdmin, async (req, res) => {
   try {
     const { id: idEmpleado } = req.params;
@@ -793,8 +950,8 @@ app.delete('/api/admin/cashiers/:id', autenticarUsuario, esAdmin, async (req, re
 });
 
 // ============ RUTAS DE RECOMPENSAS (ADMIN) ===============
-
-// --- 1. OBTENER TODAS LAS REGLAS DE RECOMPENSA ---
+//==========================================================
+// A. OBTENER TODAS LAS REGLAS DE RECOMPENSA 
 app.get('/api/admin/rewards', autenticarUsuario, esAdmin, async (req, res) => {
   try {
     const recompensas = await prisma.recompensas.findMany({
@@ -807,7 +964,7 @@ app.get('/api/admin/rewards', autenticarUsuario, esAdmin, async (req, res) => {
   }
 });
 
-// --- 2. CREAR UNA NUEVA REGLA DE RECOMPENSA ---
+// B. CREAR UNA NUEVA REGLA DE RECOMPENSA 
 app.post('/api/admin/rewards', autenticarUsuario, esAdmin, async (req, res) => {
   try {
     // 'puntosrequeridos' lo usaremos como 'monto_requerido' o 'cantidad_requerida'
@@ -829,7 +986,7 @@ app.post('/api/admin/rewards', autenticarUsuario, esAdmin, async (req, res) => {
   }
 });
 
-// --- 3. ACTUALIZAR UNA REGLA DE RECOMPENSA ---
+// C. ACTUALIZAR UNA REGLA DE RECOMPENSA 
 app.put('/api/admin/rewards/:id', autenticarUsuario, esAdmin, async (req, res) => {
   try {
     const { id } = req.params;
@@ -852,7 +1009,7 @@ app.put('/api/admin/rewards/:id', autenticarUsuario, esAdmin, async (req, res) =
   }
 });
 
-// --- 4. ELIMINAR (DESACTIVAR) UNA REGLA DE RECOMPENSA ---
+// D. ELIMINAR (DESACTIVAR) UNA REGLA DE RECOMPENSA
 app.delete('/api/admin/rewards/:id', autenticarUsuario, esAdmin, async (req, res) => {
   try {
     const { id } = req.params;
@@ -869,71 +1026,41 @@ app.delete('/api/admin/rewards/:id', autenticarUsuario, esAdmin, async (req, res
 
 // ============ RUTA DEL DASHBOARD (ADMIN) =====
 // =============================================
-
 app.get('/api/admin/dashboard', autenticarUsuario, esAdmin, async (req, res) => {
   try {
     const hoy = new Date();
     const inicioDeMes = startOfMonth(hoy);
     const finDeMes = endOfMonth(hoy);
+    const inicioDeSemana = startOfWeek(hoy);
+    const finDeSemana = endOfWeek(hoy);
 
-    // 1. Ventas del Mes [cite: 785]
-    const ventasMes = await prisma.pedidos.aggregate({
-      _sum: {
-        total: true,
-      },
-      where: {
-        fechapedido: {
-          gte: inicioDeMes,
-          lte: finDeMes,
-        },
-      },
-    });
+    // --- 1. KPIs (Tarjetas) ---
+    const [ventasMes, pedidosTotales, clientesNuevos, productosActivos] = await Promise.all([
+      prisma.pedidos.aggregate({
+        _sum: { total: true },
+        where: { fechapedido: { gte: inicioDeMes, lte: finDeMes } },
+      }),
+      prisma.pedidos.count(),
+      prisma.clientes.count({
+        where: { fecharegistro: { gte: inicioDeMes, lte: finDeMes } },
+      }),
+      prisma.productos.count({
+        where: { activo: true },
+      })
+    ]);
 
-    // 2. Pedidos Totales (históricos) [cite: 795]
-    const pedidosTotales = await prisma.pedidos.count();
-
-    // 3. Clientes Nuevos (este mes) [cite: 797]
-    const clientesNuevos = await prisma.clientes.count({
-      where: {
-        fecharegistro: {
-          gte: inicioDeMes,
-          lte: finDeMes,
-        },
-      },
-    });
-
-    // 4. Productos Activos [cite: 798]
-    const productosActivos = await prisma.productos.count({
-      where: { activo: true },
-    });
-
-    // 5. Productos Más Vendidos (para el gráfico) [cite: 801, 803]
+    // --- 2. Gráfico 1: Top 5 Productos (Barras) ---
     const topProductosRaw = await prisma.detalle_pedido.groupBy({
       by: ['id_producto'],
-      _sum: {
-        cantidad: true,
-      },
-      orderBy: {
-        _sum: {
-          cantidad: 'desc',
-        },
-      },
-      take: 5, // Top 5
+      _sum: { cantidad: true },
+      orderBy: { _sum: { cantidad: 'desc' } },
+      take: 5,
     });
-
-    // Necesitamos los nombres de esos productos
     const productoIds = topProductosRaw.map(p => p.id_producto);
     const productosInfo = await prisma.productos.findMany({
-      where: {
-        id_producto: { in: productoIds },
-      },
-      select: {
-        id_producto: true,
-        nombre: true,
-      },
+      where: { id_producto: { in: productoIds } },
+      select: { id_producto: true, nombre: true },
     });
-
-    // Combinamos los datos para el gráfico
     const productosMasVendidos = topProductosRaw.map(p => {
       const info = productosInfo.find(info => info.id_producto === p.id_producto);
       return {
@@ -942,13 +1069,58 @@ app.get('/api/admin/dashboard', autenticarUsuario, esAdmin, async (req, res) => 
       };
     });
 
-    // 6. Enviar todos los datos juntos
+    // --- 3. Gráfico 2: Ventas por Día de la Semana (Líneas) ---
+    const ventasSemanaRaw = await prisma.$queryRaw`
+      SELECT 
+        EXTRACT(DOW FROM fechapedido) as "diaSemana", 
+        SUM(total) as "totalVentas"
+      FROM pedidos
+      WHERE fechapedido BETWEEN ${inicioDeSemana} AND ${finDeSemana}
+      GROUP BY "diaSemana"
+      ORDER BY "diaSemana" ASC;
+    `;
+    const dias = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
+    const ventasPorDia = dias.map((dia, index) => {
+      const dataDelDia = ventasSemanaRaw.find(d => d.diaSemana === index);
+      return {
+        dia: dia,
+        total: dataDelDia ? parseFloat(dataDelDia.totalVentas) : 0
+      };
+    });
+
+    // --- 4. 🛠️ NUEVO: Gráfico 3: Tamaños Más Vendidos (Pastel) ---
+    const tamanosMasVendidos = await prisma.$queryRaw`
+      SELECT 
+        (personalizacion->>'Tamaño') as "tamano", 
+        SUM(cantidad) as "totalVendido"
+      FROM detalle_pedido
+      WHERE personalizacion->>'Tamaño' IS NOT NULL
+      GROUP BY "tamano"
+      ORDER BY "totalVendido" DESC;
+    `;
+
+    // --- 5. 🛠️ NUEVO: Gráfico 4: Ventas por Cajero (Barras) ---
+    const ventasPorCajero = await prisma.$queryRaw`
+      SELECT 
+        e.nombrecompleto,
+        COUNT(p.id_pedido) as "totalVentas"
+      FROM pedidos p
+      JOIN empleados e ON p.id_empleado = e.id_empleado
+      WHERE p.id_empleado IS NOT NULL
+      GROUP BY e.nombrecompleto
+      ORDER BY "totalVentas" DESC;
+    `;
+
+    // --- 6. Enviar todos los datos juntos ---
     res.json({
       ventasDelMes: ventasMes._sum.total || 0,
       pedidosTotales: pedidosTotales || 0,
       clientesNuevos: clientesNuevos || 0,
       productosActivos: productosActivos || 0,
       productosMasVendidos: productosMasVendidos,
+      ventasPorDia: ventasPorDia,
+      tamanosMasVendidos: tamanosMasVendidos.map(t => ({ ...t, totalVendido: Number(t.totalVendido) })),
+      ventasPorCajero: ventasPorCajero.map(v => ({ ...v, totalVentas: Number(v.totalVentas) })),
     });
 
   } catch (error) {
@@ -956,6 +1128,106 @@ app.get('/api/admin/dashboard', autenticarUsuario, esAdmin, async (req, res) => 
     res.status(500).json({ error: 'Error interno del servidor' });
   }
 });
+
+// ============ RUTA DE CORTE DE CAJA ==========
+// =============================================
+// (Accesible por Admin y Cajero)
+
+app.get('/api/admin/corte-caja', autenticarUsuario, esPersonalAutorizado(['Administrador', 'Cajero']), async (req, res) => {
+  try {
+    // 1. Obtener la fecha de la consulta (o usar 'hoy' por defecto)
+    // El frontend enviará ?fecha=YYYY-MM-DD
+    const fechaQuery = req.query.fecha || new Date().toISOString();
+    const fecha = parseISO(fechaQuery);
+    const inicioDelDia = startOfDay(fecha);
+    const finDelDia = endOfDay(fecha);
+
+    // 2. Ejecutar todas las consultas en paralelo
+    const [
+      ventasPorMetodo,
+      productosVendidosRaw,
+      inventarioActual
+    ] = await Promise.all([
+      
+      // -- CONSULTA A: Total de Ventas por Método de Pago --
+      prisma.pedidos.groupBy({
+        by: ['metodo_pago'],
+        _sum: {
+          total: true,
+        },
+        where: {
+          estado: 'Completado', // Solo cuenta pedidos ya pagados
+          fechapedido: {
+            gte: inicioDelDia,
+            lte: finDelDia,
+          },
+        },
+      }),
+
+      // -- CONSULTA B: Lista de Productos Vendidos Hoy --
+      prisma.detalle_pedido.groupBy({
+        by: ['id_producto'],
+        _sum: {
+          cantidad: true,
+          preciounitario: true, // Asumimos que preciounitario ya está guardado
+        },
+        where: {
+          pedidos: { // Filtra por pedidos que SÍ estén completados
+            estado: 'Completado',
+            fechapedido: {
+              gte: inicioDelDia,
+              lte: finDelDia,
+            },
+          },
+        },
+      }),
+
+      // -- CONSULTA C: Stock Actual de Ingredientes --
+      prisma.ingredientes.findMany({
+        where: { activo: true },
+        select: {
+          nombre: true,
+          stockactual: true,
+          stockminimo: true,
+          unidadmedida: true,
+        },
+        orderBy: {
+          stockactual: 'asc', // Muestra los más bajos primero
+        },
+      })
+    ]);
+
+    // 3. Formatear los datos de Productos Vendidos (añadir nombres)
+    const productoIds = productosVendidosRaw.map(p => p.id_producto);
+    const productosInfo = await prisma.productos.findMany({
+      where: { id_producto: { in: productoIds } },
+      select: { id_producto: true, nombre: true }
+    });
+
+    const productosVendidos = productosVendidosRaw.map(p => {
+      const info = productosInfo.find(i => i.id_producto === p.id_producto);
+      return {
+        id: p.id_producto,
+        nombre: info ? info.nombre : 'Producto Borrado',
+        cantidad: p._sum.cantidad || 0,
+        precioUnitario: p._sum.preciounitario || 0,
+        total: (p._sum.cantidad || 0) * (p._sum.preciounitario || 0)
+      };
+    });
+
+    // 4. Enviar el reporte completo
+    res.json({
+      ventasPorMetodo,
+      productosVendidos,
+      inventarioActual
+    });
+
+  } catch (error) {
+    console.error("Error al generar corte de caja:", error);
+    res.status(500).json({ error: 'Error interno del servidor' });
+  }
+});
+
 
 // =========================== FIN RUTAS DEL API =========================== //
 
