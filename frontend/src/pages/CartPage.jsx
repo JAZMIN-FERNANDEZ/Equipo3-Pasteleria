@@ -3,8 +3,8 @@ import { useNavigate } from 'react-router-dom';
 import { useCart } from '../context/CartContext';
 
 function CartPage() {
-  const { cartItems, removeFromCart, total } = useCart();
-  const navigate = useNavigate(); 
+  const { cartItems, removeFromCart, recompensa, subtotal, descuento, totalFinal } = useCart();
+  const navigate = useNavigate();
 
   if (cartItems.length === 0) {
     return (
@@ -66,13 +66,30 @@ function CartPage() {
             </table>
           </div>
 
-          <div className="flex justify-end items-center mt-8">
-            <span className="text-xl font-bold text-gray-800 mr-4">
-              Total: ${total.toFixed(2)}
-            </span>
+          <div className="flex flex-col items-end mt-8">
+            {/* Subtotal */}
+            <div className="w-1/3 text-right mb-2">
+              <span className="text-lg text-gray-600 mr-4">Subtotal:</span>
+              <span className="text-lg font-medium text-gray-800">${subtotal.toFixed(2)}</span>
+            </div>
+            
+            {/* Muestra la recompensa si existe */}
+            {recompensa && (
+              <div className="w-1/3 text-right mb-2">
+                <span className="text-lg text-green-600 mr-4">{recompensa.nombrerecompensa}:</span>
+                <span className="text-lg font-medium text-green-600">-${descuento.toFixed(2)}</span>
+              </div>
+            )}
+
+            {/* Total Final */}
+            <div className="w-1/3 text-right mt-2 border-t pt-2">
+              <span className="text-xl font-bold text-gray-800 mr-4">Total:</span>
+              <span className="text-xl font-bold text-gray-900">${totalFinal.toFixed(2)}</span>
+            </div>
+
             <button
-              className="bg-pink-500 hover:bg-pink-600 text-white font-bold py-3 px-6 rounded-md transition duration-300"
-              onClick={() => navigate('/checkout')} 
+              className="mt-4 bg-pink-500 hover:bg-pink-600 text-white font-bold py-3 px-6 rounded-md transition duration-300"
+              onClick={() => navigate('/checkout')}
             >
               Comprar Carrito
             </button>

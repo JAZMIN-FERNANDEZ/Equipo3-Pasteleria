@@ -9,7 +9,7 @@ function ProtectedRoute({ allowedRoles }) {
     return <Navigate to="/login" replace />;
   }
 
-  // 2. 🛠️ MODIFICADO: Revisa si el rol del usuario está INCLUIDO en el array
+  // 2. Revisa si el rol del usuario está INCLUIDO en el array
   if (!allowedRoles.includes(user.rol)) {
     // Si no tiene el rol, lo manda al inicio
     return <Navigate to="/" replace />;
