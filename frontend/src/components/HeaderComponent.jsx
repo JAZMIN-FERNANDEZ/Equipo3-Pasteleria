@@ -16,6 +16,7 @@ const HeaderComponent = () => {
 
     const menuItems = [
       { label: 'Inicio', path: '/', roles: ['cliente', 'admin', 'empleado', 'Administrador', 'Cliente', 'Cajero'] },
+      { label: 'Clientes', path: '/admin/clientes', roles: ['admin', 'Administrador'] },
       { label: 'Cajeros', path: '/admin/cajeros', roles: ['admin', 'Administrador'] },
       { label: 'Proveedores', path: '/admin/proveedores', roles: ['admin', 'Administrador'] },
       { label: 'Carrito', path: '/cart', roles: ['empleado','cliente', 'Cliente', 'Cajero'] },
@@ -23,7 +24,7 @@ const HeaderComponent = () => {
       { label: 'Mis Pedidos', path: '/mis-pedidos', roles: ['cliente', 'Cliente'] },
       { label: 'Recompensas', path: '/admin/recompensas', roles: ['admin', 'Administrador'] },
       { label: 'Estadísticas', path: '/admin/dashboard', roles: ['admin', 'Administrador'] },
-      { label: 'Gestión de Pedidos', path: '/gestion/pedidos', roles: ['empleado', 'admin', 'Administrador', 'Cajero'] },
+      { label: 'Pedidos', path: '/gestion/pedidos', roles: ['empleado', 'admin', 'Administrador', 'Cajero'] },
       { label: 'Cierre de Caja', path: '/cierre', roles: ['empleado', 'admin', 'Administrador', 'Cajero'] },
     ];
 

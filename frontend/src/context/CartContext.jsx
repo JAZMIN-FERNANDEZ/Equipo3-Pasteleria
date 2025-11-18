@@ -9,22 +9,26 @@ export function CartProvider({ children }) {
   const [loading, setLoading] = useState(false);
   const { user } = useAuth(); 
 
+  // --- 🛠️ NUEVOS ESTADOS ---
+  const [recompensa, setRecompensa] = useState(null);
+  const [subtotal, setSubtotal] = useState(0);
+  const [descuento, setDescuento] = useState(0);
+  const [totalFinal, setTotalFinal] = useState(0);
+
+
   const fetchCart = useCallback(async () => {
-    // ... (esta función no cambia)
     if (!user) return; 
     setLoading(true);
     try {
       const response = await apiClient.get('/cart');
-      const formattedItems = response.data.map(item => ({
-        cartId: item.id_item_carrito,
-        productId: item.id_producto,
-        // OJO: Corregí un bug aquí, Prisma devuelve 'productos' (plural) no 'producto'
-        name: `${item.productos.nombre} (${Object.values(item.personalizacion).join(', ')})`,
-        quantity: item.cantidad,
-        price: parseFloat(item.productos.preciobase),
-        subtotal: parseFloat(item.productos.preciobase) * item.cantidad,
-      }));
-      setCartItems(formattedItems);
+      
+      // 🛠️ ACTUALIZADO: Guarda todos los datos de la API
+      setCartItems(response.data.items);
+      setRecompensa(response.data.recompensa);
+      setSubtotal(response.data.subtotal);
+      setDescuento(response.data.descuento);
+      setTotalFinal(response.data.totalFinal);
+
     } catch (error) {
       console.error("Error al cargar el carrito:", error);
     } finally {
@@ -32,52 +36,56 @@ export function CartProvider({ children }) {
     }
   }, [user]);
 
-  const clearLocalCart = () => {
-    setCartItems([]);
-  };
-
   useEffect(() => {
     if (user) {
       fetchCart();
     } else {
-      setCartItems([]); 
+      // 🛠️ Limpia todo al cerrar sesión
+      setCartItems([]);
+      setRecompensa(null);
+      setSubtotal(0);
+      setDescuento(0);
+      setTotalFinal(0);
     }
   }, [user, fetchCart]);
 
-  // ========= 🛠️ MODIFICACIÓN AQUÍ =========
   const addToCart = async (productToAdd) => {
     try {
-      // 1. Hacemos que la función sea 'async' y 'await' la llamada
       await apiClient.post('/cart', productToAdd);
-      
-      // 2. Refrescamos el carrito *antes* de terminar la función
-      await fetchCart(); 
+      await fetchCart(); // Recarga todo (incluyendo descuentos)
     } catch (error) {
       console.error("Error al añadir al carrito:", error);
-      // 3. (Opcional) Lanza el error para que handleSubmit lo atrape
-      throw error; 
+      throw error;
     }
   };
-  // ======================================
 
   const removeFromCart = async (cartItemId) => {
-    // ... (esta función no cambia)
     try {
       await apiClient.delete(`/cart/${cartItemId}`);
-      await fetchCart();
+      await fetchCart(); // Recarga todo (incluyendo descuentos)
     } catch (error) {
       console.error("Error al borrar del carrito:", error);
     }
   };
-
-  const total = cartItems.reduce((acc, item) => acc + item.subtotal, 0);
+  
+  // Función para limpiar localmente
+  const clearLocalCart = () => {
+    setCartItems([]);
+    setRecompensa(null);
+    setSubtotal(0);
+    setDescuento(0);
+    setTotalFinal(0);
+  };
 
   return (
-      <CartContext.Provider value={{ cartItems, addToCart, removeFromCart, total, loading, clearLocalCart }}>
-        {children}
-      </CartContext.Provider>
-    );
-  }
+    <CartContext.Provider value={{ 
+      cartItems, addToCart, removeFromCart, loading, clearLocalCart,
+      recompensa, subtotal, descuento, totalFinal // <-- 🛠️ Pasa los nuevos valores
+    }}>
+      {children}
+    </CartContext.Provider>
+  );
+}
 
 export function useCart() {
   return useContext(CartContext);

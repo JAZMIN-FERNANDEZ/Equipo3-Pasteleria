@@ -24,6 +24,8 @@ import GestionRecompensasPage from './pages/GestionRecompensasPage';
 import CheckoutPage from './pages/CheckOutPage';
 import ConfirmationPage from './pages/ConfirmationPage';
 import CorteCajaPage from './pages/CorteCajaPage';
+import GestionClientePage from './pages/GestionClientesPage';
+
 
 const router = createBrowserRouter([
   // --- Rutas públicas (sin Header) ---
@@ -69,6 +71,7 @@ const router = createBrowserRouter([
       {
         element: <ProtectedRoute allowedRoles="Administrador" />, // <-- 3. GUARDIÁN DE ADMIN
         children: [
+          { path: "admin/clientes", element: <GestionClientePage /> },
           { path: "admin/proveedores", element: <GestionProveedoresPage /> },
           { path: "admin/cajeros", element: <GestionCajerosPage /> },
           { path: "admin/recompensas", element: <GestionRecompensasPage /> },

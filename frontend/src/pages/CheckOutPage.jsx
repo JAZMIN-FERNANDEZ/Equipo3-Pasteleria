@@ -6,7 +6,7 @@ import apiClient from '../api';
 
 function CheckoutPage() {
   const navigate = useNavigate();
-  const { total, clearLocalCart } = useCart();
+  const { totalFinal, clearLocalCart } = useCart();
   const { user } = useAuth(); // <-- 2. Obtén el usuario
   
   const [metodoPago, setMetodoPago] = useState(null);
@@ -17,8 +17,8 @@ function CheckoutPage() {
   // --- Función para finalizar el pedido ---
   const handleCheckout = async () => {
     // ... (tus validaciones de monto y método de pago) ...
-    if (!metodoPago) {
-      setError("Por favor, selecciona un método de pago.");
+    if (metodoPago === 'Efectivo' && parseFloat(montoPagoCon) < totalFinal) {
+      setError(`El monto a pagar ($${montoPagoCon}) no puede ser menor al total ($${totalFinal.toFixed(2)}).`);
       return;
     }
     if (metodoPago === 'Efectivo' && parseFloat(montoPagoCon) < total) {
@@ -36,10 +36,8 @@ function CheckoutPage() {
       const payload = {
         metodoPago: metodoPago,
         montoPagoCon: metodoPago === 'Efectivo' ? montoPagoCon : null,
-        total: total,
-        // 🛠️ Si es Cajero, crea el pedido como "Completado"
-        // Si es Cliente, se omitirá y el backend lo pondrá "Pendiente"
-        estado: esCajero ? 'Completado' : undefined 
+        total: totalFinal, // 🛠️ Envía el total FINAL (con descuento)
+        estado: esCajero ? 'Completado' : undefined
       };
 
       // 1. Llamar al backend para crear el pedido
@@ -77,7 +75,8 @@ function CheckoutPage() {
         {/* ... (El resto del JSX: total, botones de pago, etc. no cambian) ... */}
         <div className="mb-4">
           <p className="text-lg text-gray-700">Total a Pagar:</p>
-          <p className="text-4xl font-bold text-pink-500">${total.toFixed(2)}</p>
+          {/* 🛠️ Muestra el 'totalFinal' */}
+          <p className="text-4xl font-bold text-pink-500">${totalFinal.toFixed(2)}</p>
         </div>
         <div className="space-y-4 mb-6">
           <button onClick={() => setMetodoPago('Efectivo')} className={`w-full p-4 border rounded-lg text-lg font-medium transition ${metodoPago === 'Efectivo' ? 'bg-blue-500 text-white' : 'bg-gray-100 hover:bg-gray-200'}`}>

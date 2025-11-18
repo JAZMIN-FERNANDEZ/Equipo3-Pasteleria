@@ -104,11 +104,11 @@ app.post('/api/auth/login', async (req, res) => {
     // Log 2: Buscar al usuario (Verificar nombre del campo en where)
     console.log(`Buscando usuario con correo: ${correo}`);
     const usuario = await prisma.usuarios.findUnique({
-      // ¡¡REVISA ESTE NOMBRE DE CAMPO!! Debe coincidir EXACTO con tu schema.prisma
+      // Debe coincidir EXACTO con schema.prisma
       where: { correoelectronico: correo }, 
       include: { 
-        // ¡¡REVISA ESTE NOMBRE DE RELACIÓN Y CAMPO!!
-        roles: true // Asumiendo que la relación se llama 'roles'
+        // Debe coincidir EXACTO con schema.prisma
+        roles: true 
       } 
     });
 
@@ -132,7 +132,6 @@ app.post('/api/auth/login', async (req, res) => {
     }
 
     // Log 5: Verificar acceso al nombre del rol
-    // ¡¡REVISA ESTE NOMBRE DE CAMPO DEL ROL!!
     const roleName = usuario.roles?.nombrerol ?? 'RolDesconocido'; 
     console.log('Rol obtenido:', roleName);
 
@@ -227,17 +226,84 @@ app.post('/api/auth/register', async (req, res) => {
 app.get('/api/cart', autenticarUsuario, async (req, res) => {
   try {
     const idUsuario = req.usuario.id;
+    let recompensaAplicada = null;
+    let descuento = 0;
     
+    // 1. Busca el 'id_cliente' del usuario
+    const cliente = await prisma.clientes.findUnique({
+      where: { id_usuario: idUsuario },
+      select: { id_cliente: true }
+    });
+
+    // Si no es un cliente (ej. Cajero) o no se encuentra, devuelve el carrito normal
+    if (!cliente) {
+      const itemsCajero = await prisma.carrito_items.findMany({ 
+        where: { id_usuario: idUsuario },
+        include: { productos: true } 
+      });
+      // (Aquí iría el formateo de items para el cajero)
+      return res.json({ items: itemsCajero, recompensa: null, subtotal: 0, descuento: 0, totalFinal: 0 });
+    }
+
+    // 2. Obtiene los items del carrito del cliente
     const items = await prisma.carrito_items.findMany({ 
+      where: { id_usuario: idUsuario },
+      include: { productos: true } 
+    });
+
+    // 3. Formatea los items y calcula el subtotal
+    let subtotal = 0;
+    const formattedItems = items.map(item => {
+      // (Aquí deberíamos calcular el precio con personalización, pero lo simplificamos)
+      const precioItem = parseFloat(item.productos.preciobase); 
+      const subtotalItem = precioItem * item.cantidad;
+      subtotal += subtotalItem;
+
+      return {
+        cartId: item.id_item_carrito,
+        productId: item.id_producto,
+        name: `${item.productos.nombre} (${Object.values(item.personalizacion || {}).join(', ')})`,
+        quantity: item.cantidad,
+        price: precioItem,
+        subtotal: subtotalItem,
+      };
+    });
+
+    // 4. Busca una recompensa activa para ESE cliente
+    const recompensaActiva = await prisma.cliente_recompensas.findFirst({
       where: { 
-        id_usuario: idUsuario // <-- 🛠️ CORREGIDO (minúscula)
+        id_cliente: cliente.id_cliente,
+        estado: 'activa' 
       },
       include: { 
-        productos: true 
-      } 
+        recompensas: true // Incluye los detalles de la regla (ej. 10% de descuento)
+      }
     });
-    
-    res.json(items);
+
+    // 5. Si existe, calcula el descuento
+    if (recompensaActiva) {
+      const regla = recompensaActiva.recompensas;
+      recompensaAplicada = regla; // Guardamos la regla para enviarla al frontend
+
+      if (regla.tipo === 'PORCENTAJE_DESCUENTO') {
+        descuento = subtotal * (parseFloat(regla.valor) / 100);
+      } else if (regla.tipo === 'MONTO_FIJO_DESCUENTO') {
+        descuento = parseFloat(regla.valor);
+      }
+      // (Aquí iría la lógica para 'PRODUCTO_GRATIS', etc.)
+    }
+
+    const totalFinal = subtotal - descuento;
+
+    // 6. Devuelve el carrito completo con el descuento aplicado
+    res.json({ 
+      items: formattedItems, 
+      recompensa: recompensaAplicada, 
+      subtotal, 
+      descuento, 
+      totalFinal 
+    });
+
   } catch (error) {
     console.error("Error al obtener el carrito:", error);
     res.status(500).json({ error: 'Error al obtener el carrito' });
@@ -387,64 +453,46 @@ app.get('/api/orders/my-history', autenticarUsuario, async (req, res) => {
 
 // ============ RUTA DE CHECKOUT (CREAR PEDIDO) ====================
 app.post('/api/orders', autenticarUsuario, async (req, res) => {
-  const idUsuario = req.usuario.id;
-  
-  // 1. Obtenemos los nuevos datos: 'estado' es opcional
-  const { metodoPago, montoPagoCon, total, estado } = req.body;
-  const idClienteSolicitante = req.body.idCliente; // ID del cliente (para el cajero)
+  const { id: idUsuarioAuth, rol: rolUsuarioAuth } = req.usuario;
+  const { metodoPago, montoPagoCon, total } = req.body; // 'total' es el total FINAL (con descuento)
 
   try {
-    let clientePedidoId;
-
-    // 2. Determinar quién es el cliente del pedido
-    if (req.usuario.rol === 'Cliente') {
-      // Si el que compra es un Cliente, busca su propio ID de cliente
-      const cliente = await prisma.clientes.findUnique({
-        where: { id_usuario: idUsuario },
-        select: { id_cliente: true }
-      });
-      if (!cliente) throw new Error('Usuario no es un cliente válido.');
-      clientePedidoId = cliente.id_cliente;
+    const nuevoPedido = await prisma.$transaction(async (tx) => {
       
-    } else if (req.usuario.rol === 'Cajero') {
-      // Si es un Cajero, asumimos que es una VENTA EN MOSTRADOR
-      // y usamos un ID de cliente genérico (ej. ID 1 = "Venta Mostrador")
-      // O (mejor) el frontend debería poder seleccionar un cliente.
-      // Por ahora, usaremos un ID de cliente genérico (supongamos que el cliente con ID 1 es "Venta Mostrador")
-      clientePedidoId = idClienteSolicitante || 1; // TODO: Implementar selección de cliente en caja
-    }
+      let clientePedidoId;
+      let empleadoPedidoId = null;
 
-    // ... (Tu lógica de buscar items del carrito y validar stock sigue aquí)
-    const itemsDelCarrito = await prisma.carrito_items.findMany({
-      where: { id_usuario: idUsuario }, // El carrito sigue siendo el del cajero/cliente logueado
-      include: { productos: { select: { nombre: true, stockproductosterminados: true, preciobase: true } } }
-    });
-    if (itemsDelCarrito.length === 0) throw new Error('Tu carrito está vacío.');
-    
-    // ... (Tu lógica de $transaction para validar stock y descontar)
-    const BUFFER_EXHIBICION = 2;
-
-const nuevoPedido = await prisma.$transaction(async (tx) => {
+      // 1. Lógica de Rol (para saber quién compra)
+      if (rolUsuarioAuth === 'Cliente') {
+        const cliente = await tx.clientes.findUnique({
+          where: { id_usuario: idUsuarioAuth },
+          select: { id_cliente: true }
+        });
+        if (!cliente) throw new Error('Usuario no es un cliente válido.');
+        clientePedidoId = cliente.id_cliente;
+      } else if (rolUsuarioAuth === 'Cajero') {
+        const empleado = await tx.empleados.findUnique({ where: { id_usuario: idUsuarioAuth }, select: { id_empleado: true }});
+        if (!empleado) throw new Error('Usuario Cajero no encontrado.');
+        empleadoPedidoId = empleado.id_empleado;
+        clientePedidoId = 1; // Cliente "Venta Mostrador"
+      }
       
-      const cliente = await tx.clientes.findUnique({ /* ... */ });
-      if (!cliente) throw new Error('Usuario no es un cliente válido.');
-
+      // 2. Lógica de Stock y Carrito (sin cambios)
       const itemsDelCarrito = await tx.carrito_items.findMany({
-        where: { id_usuario: idUsuario },
-        include: { productos: { /* ... */ } }
+        where: { id_usuario: idUsuarioAuth },
+        include: { productos: { select: { nombre: true, stockproductosterminados: true, preciobase: true } } }
       });
       if (itemsDelCarrito.length === 0) throw new Error('Tu carrito está vacío.');
-
-      const itemsParaDetalle = []; // Array para guardar los items del pedido
       
+      const BUFFER_EXHIBICION = 2;
+      const itemsParaDetalle = [];
       for (const item of itemsDelCarrito) {
+        // ... (toda tu lógica de validación de stock y descuento de 'productos')
         const producto = item.productos;
         const stockDisponible = producto.stockproductosterminados - BUFFER_EXHIBICION;
-
         if (item.cantidad > stockDisponible) {
           throw new Error(`¡Stock insuficiente! El producto "${producto.nombre}"...`);
         }
-
         itemsParaDetalle.push({
           id_producto: item.id_producto,
           cantidad: item.cantidad,
@@ -457,32 +505,77 @@ const nuevoPedido = await prisma.$transaction(async (tx) => {
         });
       }
 
-      // 3. Lógica de Estado Modificada
+      // --- 🛠️ 3. LÓGICA DE CONSUMIR RECOMPENSA ---
+      // Si el comprador es un Cliente, busca y "consume" su recompensa activa
+      if (rolUsuarioAuth === 'Cliente') {
+        const recompensaActiva = await tx.cliente_recompensas.findFirst({
+          where: { id_cliente: clientePedidoId, estado: 'activa' }
+        });
+        
+        if (recompensaActiva) {
+          await tx.cliente_recompensas.update({
+            where: { id_clienterecompensa: recompensaActiva.id_clienterecompensa },
+            data: { estado: 'canjeada' } // La marca como usada
+          });
+        }
+      }
+
+      // 4. Crear el Pedido
       const pedido = await tx.pedidos.create({
         data: {
           id_cliente: clientePedidoId,
-          id_empleado: req.usuario.rol === 'Cajero' ? (await tx.empleados.findUnique({where: {id_usuario: idUsuario}})).id_empleado : null,
-          total: total,
-          estado: estado || 'Pendiente', // Si no se envía 'estado', es 'Pendiente'
+          id_empleado: empleadoPedidoId,
+          total: total, // Usa el total final (con descuento) enviado por el frontend
+          estado: rolUsuarioAuth === 'Cajero' ? 'Completado' : 'Pendiente',
           metodo_pago: metodoPago,
           monto_pago_con: metodoPago === 'Efectivo' ? parseFloat(montoPagoCon) : null
         }
       });
-      
-      // ... (El resto de la transacción: crear detalle_pedido, borrar carrito_items)
+
+      // 5. Crear detalle_pedido y Limpiar carrito (sin cambios)
       await tx.detalle_pedido.createMany({
-        data: itemsParaDetalle.map(item => ({
-          ...item,
-          id_pedido: pedido.id_pedido 
-        }))
+        data: itemsParaDetalle.map(item => ({ ...item, id_pedido: pedido.id_pedido }))
       });
-
       await tx.carrito_items.deleteMany({
-        where: { id_usuario: idUsuario }
+        where: { id_usuario: idUsuarioAuth }
       });
 
-      return pedido;
+      return pedido; // Devuelve el pedido creado
     });
+
+    // --- 🛠️ 6. LÓGICA DE ASIGNAR NUEVA RECOMPENSA ---
+    // (Fuera de la transacción, después de que el pago fue exitoso)
+    if (rolUsuarioAuth === 'Cliente') {
+      const idCliente = nuevoPedido.id_cliente;
+      
+      // Revisa si ya tiene una recompensa activa (para no apilarlas)
+      const recompensaExistente = await prisma.cliente_recompensas.findFirst({
+        where: { id_cliente: idCliente, estado: 'activa' }
+      });
+
+      if (!recompensaExistente) {
+        // Busca todas las reglas de recompensa
+        const reglas = await prisma.recompensas.findMany({
+          where: { activo: true },
+          orderBy: { puntosrequeridos: 'desc' } // Revisa la más cara primero
+        });
+
+        for (const regla of reglas) {
+          // Si el total de la compra CUMPLE la condición de la regla
+          if (parseFloat(nuevoPedido.total) >= parseFloat(regla.puntosrequeridos)) {
+            // Asigna esta recompensa al cliente
+            await prisma.cliente_recompensas.create({
+              data: {
+                id_cliente: idCliente,
+                id_recompensa: regla.id_recompensa,
+                estado: 'activa' // Lista para su siguiente compra
+              }
+            });
+            break; // Solo asigna la primera que cumpla (la más alta)
+          }
+        }
+      }
+    }
 
     res.status(201).json({ id_pedido: nuevoPedido.id_pedido, estado: nuevoPedido.estado });
 
@@ -604,7 +697,7 @@ app.post('/api/admin/products', autenticarUsuario, esAdmin, upload.single('image
 app.put('/api/admin/products/:id', autenticarUsuario, esAdmin, upload.single('imagen'), async (req, res) => {
   try {
     const { id } = req.params;
-    const { sku, nombre, descripcion, precioBase, id_categoria, stockproductosterminados } = req.body;
+    const { sku, nombre, descripcion, precioBase, id_categoria, stockProductosTerminados } = req.body;
 
     const dataToUpdate = {
       sku: sku,
@@ -612,7 +705,7 @@ app.put('/api/admin/products/:id', autenticarUsuario, esAdmin, upload.single('im
       descripcion: descripcion,
       preciobase: parseFloat(precioBase),
       id_categoria: parseInt(id_categoria),
-      stockproductosterminados: parseInt(stockproductosterminados)
+      stockproductosterminados: parseInt(stockProductosTerminados)
     };
 
     if (req.file) {
@@ -797,6 +890,147 @@ app.delete('/api/admin/suppliers/:id', autenticarUsuario, esAdmin, async (req, r
     res.status(500).json({ error: 'Error interno del servidor' });
   }
 });
+
+// ==================================================
+// =========== RUTAS DE CLIENTES (ADMIN) ===========
+// --- 1. OBTENER TODOS LOS CLIENTES ---
+app.get('/api/admin/clients', autenticarUsuario, esAdmin, async (req, res) => {
+  try {
+    const clientes = await prisma.clientes.findMany({
+      where: {
+        activo: true,
+        // Opcional: Filtramos para no incluir el cliente "Venta Mostrador" (ID 1)
+        id_cliente: { not: 1 } 
+      },
+      include: {
+        // Incluimos los datos del usuario para obtener el correo
+        usuarios: {
+          select: { correoelectronico: true }
+        }
+      },
+      orderBy: {
+        fecharegistro: 'desc'
+      }
+    });
+    res.json(clientes);
+  } catch (error) {
+    console.error("Error al obtener clientes:", error);
+    res.status(500).json({ error: 'Error interno del servidor' });
+  }
+});
+
+// --- 2. CREAR UN NUEVO CLIENTE ---
+app.post('/api/admin/clients', autenticarUsuario, esAdmin, async (req, res) => {
+  const { nombre, correoelectronico, contrasena, telefono } = req.body;
+
+  try {
+    // 1. Buscar el ID del rol 'Cliente'
+    const clienteRole = await prisma.roles.findUnique({
+      where: { nombrerol: 'Cliente' },
+      select: { id_rol: true }
+    });
+    if (!clienteRole) {
+      return res.status(500).json({ error: "Configuración: El rol 'Cliente' no fue encontrado." });
+    }
+
+    // 2. Hashear la contraseña
+    const hashedPassword = await bcrypt.hash(contrasena, 10);
+
+    // 3. Crear 'usuarios' y 'clientes' en una transacción
+    const nuevoCliente = await prisma.$transaction(async (tx) => {
+      const nuevoUsuario = await tx.usuarios.create({
+        data: {
+          correoelectronico: correoelectronico,
+          contrasena: hashedPassword,
+          id_rol: clienteRole.id_rol,
+        }
+      });
+      const nuevoCliente = await tx.clientes.create({
+        data: {
+          id_usuario: nuevoUsuario.id_usuario,
+          nombre: nombre,
+          telefono: telefono
+        }
+      });
+      return nuevoCliente;
+    });
+    res.status(201).json(nuevoCliente);
+
+  } catch (error) {
+    console.error("Error al crear cliente:", error);
+    if (error.code === 'P2002' && error.meta?.target.includes('correoelectronico')) {
+      return res.status(409).json({ error: 'Este correo electrónico ya está en uso.' });
+    }
+    res.status(500).json({ error: 'Error interno del servidor' });
+  }
+});
+
+// --- 3. ACTUALIZAR UN CLIENTE ---
+app.put('/api/admin/clients/:id', autenticarUsuario, esAdmin, async (req, res) => {
+  try {
+    const { id: idCliente } = req.params;
+    const { nombre, correoelectronico, telefono } = req.body;
+
+    await prisma.$transaction(async (tx) => {
+      // 1. Actualizar 'clientes'
+      const cliente = await tx.clientes.update({
+        where: { id_cliente: parseInt(idCliente) },
+        data: {
+          nombre: nombre,
+          telefono: telefono
+        },
+        select: { id_usuario: true } 
+      });
+
+      // 2. Actualizar 'usuarios'
+      await tx.usuarios.update({
+        where: { id_usuario: cliente.id_usuario },
+        data: { correoelectronico: correoelectronico }
+      });
+    });
+
+    res.json({ message: 'Cliente actualizado correctamente' });
+  } catch (error) {
+    console.error("Error al actualizar cliente:", error);
+    res.status(500).json({ error: 'Error interno del servidor' });
+  }
+});
+
+// --- 4. ELIMINAR (DESACTIVAR) UN CLIENTE ---
+app.delete('/api/admin/clients/:id', autenticarUsuario, esAdmin, async (req, res) => {
+  try {
+    const { id: idCliente } = req.params;
+
+    await prisma.$transaction(async (tx) => {
+      // 1. Obtener id_usuario
+      const cliente = await tx.clientes.findUnique({
+        where: { id_cliente: parseInt(idCliente) },
+        select: { id_usuario: true }
+      });
+      if (!cliente) throw new Error('Cliente no encontrado');
+
+      // 2. Desactivar 'clientes'
+      await tx.clientes.update({
+        where: { id_cliente: parseInt(idCliente) },
+        data: { activo: false }
+      });
+
+      // 3. Desactivar 'usuarios'
+      await tx.usuarios.update({
+        where: { id_usuario: cliente.id_usuario },
+        data: { activo: false }
+      });
+    });
+
+    res.status(204).send();
+  } catch (error) {
+    console.error("Error al eliminar cliente:", error);
+    res.status(500).json({ error: 'Error interno del servidor' });
+  }
+});
+
+
+
 
 // ============ RUTAS DE CAJEROS (ADMIN) ===========
 //==================================================
