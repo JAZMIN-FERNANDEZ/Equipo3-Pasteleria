@@ -1,12 +1,30 @@
+// src/pages/CartPage.jsx
+
 import React from 'react';
-import { useNavigate } from 'react-router-dom'; 
+import { useNavigate } from 'react-router-dom';
 import { useCart } from '../context/CartContext';
 
 function CartPage() {
+  // Obtenemos los datos del contexto (asegúrate de que 'subtotal' y 'totalFinal' vengan del contexto)
   const { cartItems, removeFromCart, recompensa, subtotal, descuento, totalFinal } = useCart();
   const navigate = useNavigate();
 
-  if (cartItems.length === 0) {
+  // --- FUNCIÓN DE SEGURIDAD PARA FORMATO DE MONEDA ---
+  const formatCurrency = (value) => {
+    // 1. Si el valor es undefined o null, devuelve 0
+    if (value === undefined || value === null) return "$0.00";
+    
+    // 2. Asegura que sea un número (por si viene como string desde la BD)
+    const numberValue = parseFloat(value);
+    
+    // 3. Si no es un número válido, devuelve 0
+    if (isNaN(numberValue)) return "$0.00";
+
+    // 4. Retorna el formato correcto
+    return `$${numberValue.toFixed(2)}`;
+  };
+
+  if (!cartItems || cartItems.length === 0) {
     return (
       <div className="bg-gray-100 min-h-screen">
         <main className="container mx-auto mt-10 p-4 text-center">
@@ -26,7 +44,6 @@ function CartPage() {
           
           <div className="overflow-x-auto">
             <table className="min-w-full divide-y divide-gray-200">
-              {}
               <thead className="bg-gray-50">
                 <tr>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Producto</th>
@@ -39,18 +56,20 @@ function CartPage() {
               
               <tbody className="bg-white divide-y divide-gray-200">
                 {cartItems.map((item) => (
-                  <tr key={item.cartId}>
+                  <tr key={item.cartId || Math.random()}> {/* Fallback para key por seguridad */}
                     <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
-                      {item.name}
+                      {item.name || "Producto desconocido"}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                       {item.quantity}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                      ${item.price.toFixed(2)}
+                      {/* Usamos la función segura */}
+                      {formatCurrency(item.price)}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                      ${item.subtotal.toFixed(2)}
+                      {/* Usamos la función segura */}
+                      {formatCurrency(item.subtotal)}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm">
                       <button
@@ -70,21 +89,21 @@ function CartPage() {
             {/* Subtotal */}
             <div className="w-1/3 text-right mb-2">
               <span className="text-lg text-gray-600 mr-4">Subtotal:</span>
-              <span className="text-lg font-medium text-gray-800">${subtotal.toFixed(2)}</span>
+              <span className="text-lg font-medium text-gray-800">{formatCurrency(subtotal)}</span>
             </div>
             
             {/* Muestra la recompensa si existe */}
             {recompensa && (
               <div className="w-1/3 text-right mb-2">
                 <span className="text-lg text-green-600 mr-4">{recompensa.nombrerecompensa}:</span>
-                <span className="text-lg font-medium text-green-600">-${descuento.toFixed(2)}</span>
+                <span className="text-lg font-medium text-green-600">-{formatCurrency(descuento)}</span>
               </div>
             )}
 
             {/* Total Final */}
             <div className="w-1/3 text-right mt-2 border-t pt-2">
               <span className="text-xl font-bold text-gray-800 mr-4">Total:</span>
-              <span className="text-xl font-bold text-gray-900">${totalFinal.toFixed(2)}</span>
+              <span className="text-xl font-bold text-gray-900">{formatCurrency(totalFinal)}</span>
             </div>
 
             <button

@@ -1,7 +1,8 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { createBrowserRouter, RouterProvider } from "react-router-dom";
-import { CartProvider } from './context/CartContext'; // <-- 1. IMPORTA EL PROVIDER
+import { CartProvider } from './context/CartContext'; 
+import { Toaster } from 'react-hot-toast'; 
 import './index.css';
 
 import { AuthProvider } from './context/AuthContext';
@@ -108,6 +109,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
     <AuthProvider>
       <CartProvider> {}
+        <Toaster position="top-center" reverseOrder={false} />
         <RouterProvider router={router} />
       </CartProvider>
     </AuthProvider>

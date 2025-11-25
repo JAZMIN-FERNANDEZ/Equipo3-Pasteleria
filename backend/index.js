@@ -8,7 +8,7 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { startOfMonth, endOfMonth, startOfWeek, endOfWeek } from 'date-fns';
 import { startOfDay, endOfDay, parseISO } from 'date-fns';
-
+import { validate, productSchema, ingredientSchema, supplierSchema, cashierSchema, registerSchema, clientSchema, recipeSchema} from './validations.js';
 
 const autenticarUsuario = (req, res, next) => {
   try {
@@ -83,6 +83,36 @@ app.use((req, res, next) => {
   console.log(new Date().toISOString(), req.method, req.url);
   next();
 });
+
+
+const handlePrismaError = (res, error, mensajeContexto) => {
+  console.error(mensajeContexto, error); // Sigue imprimiendo en consola 
+
+  // 1. Error de restricción única (P2002)
+  // Ej: Intentar crear un usuario con un correo que ya existe o un proveedor con el mismo RFC
+  if (error.code === 'P2002') {
+    const campo = error.meta?.target ? error.meta.target.join(', ') : 'campo';
+    return res.status(409).json({ 
+      error: `El valor del campo '${campo}' ya existe en la base de datos.` 
+    });
+  }
+
+  // 2. Error de registro no encontrado (P2025)
+  if (error.code === 'P2025') {
+    return res.status(404).json({ error: 'El registro solicitado no fue encontrado.' });
+  }
+
+  // 3. Error de llave foránea (P2003)
+  // Ej: Intentar crear un producto con una categoría que no existe
+  if (error.code === 'P2003') {
+    return res.status(400).json({ error: 'Operación inválida: El registro relacionado no existe.' });
+  }
+
+  // 4. Error por defecto (Muestra el mensaje técnico si no es ninguno de los anteriores)
+    res.status(500).json({ 
+    error: error.message || 'Error interno desconocido' 
+  });
+};
 
 /* ================================================================================
                                 RUTAS DEL API
@@ -162,7 +192,7 @@ app.post('/api/auth/login', async (req, res) => {
 
 // ============ RUTA DE REGISTRO (PÚBLICA) =====
 // =============================================
-app.post('/api/auth/register', async (req, res) => {
+app.post('/api/auth/register', validate(registerSchema), async (req, res) => {
   // 1. Obtenemos los datos del formulario de React
   const { nombre, telefono, correo, contrasena } = req.body;
 
@@ -228,33 +258,18 @@ app.get('/api/cart', autenticarUsuario, async (req, res) => {
     const idUsuario = req.usuario.id;
     let recompensaAplicada = null;
     let descuento = 0;
-    
-    // 1. Busca el 'id_cliente' del usuario
-    const cliente = await prisma.clientes.findUnique({
-      where: { id_usuario: idUsuario },
-      select: { id_cliente: true }
-    });
 
-    // Si no es un cliente (ej. Cajero) o no se encuentra, devuelve el carrito normal
-    if (!cliente) {
-      const itemsCajero = await prisma.carrito_items.findMany({ 
-        where: { id_usuario: idUsuario },
-        include: { productos: true } 
-      });
-      // (Aquí iría el formateo de items para el cajero)
-      return res.json({ items: itemsCajero, recompensa: null, subtotal: 0, descuento: 0, totalFinal: 0 });
-    }
-
-    // 2. Obtiene los items del carrito del cliente
+    // 1. Obtener los items del carrito (USANDO findMany)
+    // 🛠️ CORRECCIÓN: Asegúrate de que diga 'findMany', no 'findUnique'
     const items = await prisma.carrito_items.findMany({ 
       where: { id_usuario: idUsuario },
       include: { productos: true } 
     });
 
-    // 3. Formatea los items y calcula el subtotal
+    // 2. Formatear los items y calcular subtotal
+    // (Hacemos esto PARA TODOS, Cajeros y Clientes, para que el frontend no falle)
     let subtotal = 0;
     const formattedItems = items.map(item => {
-      // (Aquí deberíamos calcular el precio con personalización, pero lo simplificamos)
       const precioItem = parseFloat(item.productos.preciobase); 
       const subtotalItem = precioItem * item.cantidad;
       subtotal += subtotalItem;
@@ -269,33 +284,39 @@ app.get('/api/cart', autenticarUsuario, async (req, res) => {
       };
     });
 
-    // 4. Busca una recompensa activa para ESE cliente
-    const recompensaActiva = await prisma.cliente_recompensas.findFirst({
-      where: { 
-        id_cliente: cliente.id_cliente,
-        estado: 'activa' 
-      },
-      include: { 
-        recompensas: true // Incluye los detalles de la regla (ej. 10% de descuento)
-      }
-    });
+    // 3. Lógica exclusiva de CLIENTES (Recompensas)
+    // Solo buscamos cliente y recompensas si el rol es Cliente
+    if (req.usuario.rol === 'Cliente') {
+      const cliente = await prisma.clientes.findUnique({
+        where: { id_usuario: idUsuario },
+        select: { id_cliente: true }
+      });
 
-    // 5. Si existe, calcula el descuento
-    if (recompensaActiva) {
-      const regla = recompensaActiva.recompensas;
-      recompensaAplicada = regla; // Guardamos la regla para enviarla al frontend
+      if (cliente) {
+        const recompensaActiva = await prisma.cliente_recompensas.findFirst({
+          where: { 
+            id_cliente: cliente.id_cliente,
+            estado: 'activa' 
+          },
+          include: { recompensas: true }
+        });
 
-      if (regla.tipo === 'PORCENTAJE_DESCUENTO') {
-        descuento = subtotal * (parseFloat(regla.valor) / 100);
-      } else if (regla.tipo === 'MONTO_FIJO_DESCUENTO') {
-        descuento = parseFloat(regla.valor);
+        if (recompensaActiva) {
+          const regla = recompensaActiva.recompensas;
+          recompensaAplicada = regla;
+
+          if (regla.tipo === 'PORCENTAJE_DESCUENTO') {
+            descuento = subtotal * (parseFloat(regla.valor) / 100);
+          } else if (regla.tipo === 'MONTO_FIJO_DESCUENTO') {
+            descuento = parseFloat(regla.valor);
+          }
+        }
       }
-      // (Aquí iría la lógica para 'PRODUCTO_GRATIS', etc.)
     }
 
-    const totalFinal = subtotal - descuento;
+    const totalFinal = Math.max(0, subtotal - descuento);
 
-    // 6. Devuelve el carrito completo con el descuento aplicado
+    // 4. Enviar respuesta unificada
     res.json({ 
       items: formattedItems, 
       recompensa: recompensaAplicada, 
@@ -454,124 +475,210 @@ app.get('/api/orders/my-history', autenticarUsuario, async (req, res) => {
 // ============ RUTA DE CHECKOUT (CREAR PEDIDO) ====================
 app.post('/api/orders', autenticarUsuario, async (req, res) => {
   const { id: idUsuarioAuth, rol: rolUsuarioAuth } = req.usuario;
-  const { metodoPago, montoPagoCon, total } = req.body; // 'total' es el total FINAL (con descuento)
+  // ⚠️ NOTA: Ya no leemos 'total' del body. Lo calculamos nosotros.
+  const { metodoPago, montoPagoCon, estado } = req.body; 
 
   try {
-    const nuevoPedido = await prisma.$transaction(async (tx) => {
-      
-      let clientePedidoId;
-      let empleadoPedidoId = null;
+    // --- 1. PREPARACIÓN DE DATOS ---
+    
+    // 1.1. Obtener el carrito
+    const itemsDelCarrito = await prisma.carrito_items.findMany({
+      where: { id_usuario: idUsuarioAuth },
+      include: { 
+        productos: true // Trae preciobase y stock
+      }
+    });
 
-      // 1. Lógica de Rol (para saber quién compra)
-      if (rolUsuarioAuth === 'Cliente') {
-        const cliente = await tx.clientes.findUnique({
+    if (itemsDelCarrito.length === 0) {
+      return res.status(400).json({ error: 'Tu carrito está vacío.' });
+    }
+
+    // 1.2. Identificar al Cliente (para descuentos)
+    let idClienteReal = null;
+    if (rolUsuarioAuth === 'Cliente') {
+      const cliente = await prisma.clientes.findUnique({
+        where: { id_usuario: idUsuarioAuth },
+        select: { id_cliente: true }
+      });
+      if (cliente) idClienteReal = cliente.id_cliente;
+    }
+    else if (rolUsuarioAuth === 'Cajero') {
+        const empleado = await tx.empleados.findUnique({
           where: { id_usuario: idUsuarioAuth },
-          select: { id_cliente: true }
+          select: { id_empleado: true }
         });
-        if (!cliente) throw new Error('Usuario no es un cliente válido.');
-        clientePedidoId = cliente.id_cliente;
-      } else if (rolUsuarioAuth === 'Cajero') {
-        const empleado = await tx.empleados.findUnique({ where: { id_usuario: idUsuarioAuth }, select: { id_empleado: true }});
         if (!empleado) throw new Error('Usuario Cajero no encontrado.');
         empleadoPedidoId = empleado.id_empleado;
-        clientePedidoId = 1; // Cliente "Venta Mostrador"
+        // El id 6 corresponde a la venta hecha en mostrador
+        clientePedidoId = 6; 
       }
-      
-      // 2. Lógica de Stock y Carrito (sin cambios)
-      const itemsDelCarrito = await tx.carrito_items.findMany({
-        where: { id_usuario: idUsuarioAuth },
-        include: { productos: { select: { nombre: true, stockproductosterminados: true, preciobase: true } } }
-      });
-      if (itemsDelCarrito.length === 0) throw new Error('Tu carrito está vacío.');
-      
-      const BUFFER_EXHIBICION = 2;
-      const itemsParaDetalle = [];
-      for (const item of itemsDelCarrito) {
-        // ... (toda tu lógica de validación de stock y descuento de 'productos')
-        const producto = item.productos;
-        const stockDisponible = producto.stockproductosterminados - BUFFER_EXHIBICION;
-        if (item.cantidad > stockDisponible) {
-          throw new Error(`¡Stock insuficiente! El producto "${producto.nombre}"...`);
+
+    // --- 2. CÁLCULO DE PRECIOS EN EL SERVIDOR 🧮 ---
+    
+    let totalCalculado = 0;
+    const itemsParaDetalle = []; // Preparamos los datos para guardar después
+
+    for (const item of itemsDelCarrito) {
+      // A. Precio Base del Producto (desde la BD, no del frontend)
+      let precioItemUnitario = parseFloat(item.productos.preciobase);
+
+      // B. Calcular costo de personalización
+      // item.personalizacion es ej: { "Tamaño": "Grande", "Sabor": "Chocolate" }
+      if (item.personalizacion) {
+        // Extraemos solo los valores: ["Grande", "Chocolate"]
+        const opcionesSeleccionadas = Object.values(item.personalizacion);
+        
+        if (opcionesSeleccionadas.length > 0) {
+          // Buscamos en la BD cuánto cuesta cada opción
+          const opcionesDb = await prisma.attribute_options.findMany({
+            where: {
+              nombreopcion: { in: opcionesSeleccionadas }
+            }
+          });
+
+          // Sumamos los costos extra
+          const costoExtra = opcionesDb.reduce((sum, opt) => sum + parseFloat(opt.ajusteprecio), 0);
+          precioItemUnitario += costoExtra;
         }
-        itemsParaDetalle.push({
-          id_producto: item.id_producto,
-          cantidad: item.cantidad,
-          preciounitario: parseFloat(producto.preciobase),
-          personalizacion: item.personalizacion
-        });
+      }
+
+      // C. Sumar al total global
+      totalCalculado += precioItemUnitario * item.cantidad;
+
+      // D. Guardamos los datos calculados para usarlos en la transacción
+      itemsParaDetalle.push({
+        id_producto: item.id_producto,
+        cantidad: item.cantidad,
+        preciounitario: precioItemUnitario, // Precio real calculado
+        personalizacion: item.personalizacion,
+        productoData: item.productos // Guardamos ref al producto para el stock
+      });
+    }
+
+    // --- 3. CÁLCULO DE DESCUENTOS (RECOMPENSAS) ---
+    
+    let descuentoAplicado = 0;
+    let recompensaAConusmirId = null;
+
+    if (idClienteReal) {
+      // Buscar recompensa activa
+      const recompensaActiva = await prisma.cliente_recompensas.findFirst({
+        where: { id_cliente: idClienteReal, estado: 'activa' },
+        include: { recompensas: true }
+      });
+
+      if (recompensaActiva) {
+        const regla = recompensaActiva.recompensas;
+        recompensaAConusmirId = recompensaActiva.id_clienterecompensa;
+
+        if (regla.tipo === 'PORCENTAJE_DESCUENTO') {
+          descuentoAplicado = totalCalculado * (parseFloat(regla.valor) / 100);
+        } else if (regla.tipo === 'MONTO_FIJO_DESCUENTO') {
+          descuentoAplicado = parseFloat(regla.valor);
+        }
+      }
+    }
+
+    // Total Final Seguro
+    const totalFinal = Math.max(0, totalCalculado - descuentoAplicado);
+
+
+    // --- 4. TRANSACCIÓN DE ESCRITURA (STOCK Y PEDIDO) ---
+    
+    const BUFFER_EXHIBICION = 2;
+
+    const nuevoPedido = await prisma.$transaction(async (tx) => {
+      
+      // 4.1. Validar Stock y Descontar
+      for (const item of itemsParaDetalle) {
+        const producto = item.productoData;
+        const stockDisponible = producto.stockproductosterminados - BUFFER_EXHIBICION;
+
+        if (item.cantidad > stockDisponible) {
+          throw new Error(`¡Stock insuficiente! El producto "${producto.nombre}" ya no está disponible.`);
+        }
+
         await tx.productos.update({
           where: { id_producto: item.id_producto },
           data: { stockproductosterminados: producto.stockproductosterminados - item.cantidad }
         });
       }
 
-      // --- 🛠️ 3. LÓGICA DE CONSUMIR RECOMPENSA ---
-      // Si el comprador es un Cliente, busca y "consume" su recompensa activa
-      if (rolUsuarioAuth === 'Cliente') {
-        const recompensaActiva = await tx.cliente_recompensas.findFirst({
-          where: { id_cliente: clientePedidoId, estado: 'activa' }
+      // 4.2. Consumir Recompensa (si aplica)
+      if (recompensaAConusmirId) {
+        await tx.cliente_recompensas.update({
+          where: { id_clienterecompensa: recompensaAConusmirId },
+          data: { estado: 'canjeada' }
         });
-        
-        if (recompensaActiva) {
-          await tx.cliente_recompensas.update({
-            where: { id_clienterecompensa: recompensaActiva.id_clienterecompensa },
-            data: { estado: 'canjeada' } // La marca como usada
-          });
-        }
       }
 
-      // 4. Crear el Pedido
+      // 4.3. Determinar IDs de cliente/empleado para el pedido
+      let clientePedidoId = idClienteReal;
+      let empleadoPedidoId = null;
+
+      if (rolUsuarioAuth === 'Cajero') {
+         // Lógica para obtener ID de empleado cajero
+         const empleado = await tx.empleados.findUnique({ where: { id_usuario: idUsuarioAuth } });
+         if (empleado) empleadoPedidoId = empleado.id_empleado;
+         clientePedidoId = 1; // Cliente genérico de mostrador
+      }
+
+      // 4.4. Crear el Pedido con el PRECIO CALCULADO
       const pedido = await tx.pedidos.create({
         data: {
           id_cliente: clientePedidoId,
           id_empleado: empleadoPedidoId,
-          total: total, // Usa el total final (con descuento) enviado por el frontend
-          estado: rolUsuarioAuth === 'Cajero' ? 'Completado' : 'Pendiente',
+          total: totalFinal, // <--- USAMOS EL TOTAL SEGURO
+          estado: (rolUsuarioAuth === 'Cajero') ? 'Completado' : 'Pendiente',
           metodo_pago: metodoPago,
           monto_pago_con: metodoPago === 'Efectivo' ? parseFloat(montoPagoCon) : null
         }
       });
 
-      // 5. Crear detalle_pedido y Limpiar carrito (sin cambios)
+      // 4.5. Guardar Detalles
       await tx.detalle_pedido.createMany({
-        data: itemsParaDetalle.map(item => ({ ...item, id_pedido: pedido.id_pedido }))
+        data: itemsParaDetalle.map(item => ({
+          id_pedido: pedido.id_pedido,
+          id_producto: item.id_producto,
+          cantidad: item.cantidad,
+          preciounitario: item.preciounitario, // Precio unitario real
+          // Nota: La columna 'personalizacion' debe existir en detalle_pedido
+          personalizacion: item.personalizacion 
+        }))
       });
+
+      // 4.6. Limpiar Carrito
       await tx.carrito_items.deleteMany({
         where: { id_usuario: idUsuarioAuth }
       });
 
-      return pedido; // Devuelve el pedido creado
+      return pedido;
     });
 
-    // --- 🛠️ 6. LÓGICA DE ASIGNAR NUEVA RECOMPENSA ---
-    // (Fuera de la transacción, después de que el pago fue exitoso)
-    if (rolUsuarioAuth === 'Cliente') {
-      const idCliente = nuevoPedido.id_cliente;
-      
-      // Revisa si ya tiene una recompensa activa (para no apilarlas)
+
+    // --- 5. ASIGNAR NUEVAS RECOMPENSAS (POST-VENTA) ---
+    // (Lógica idéntica a la anterior, pero usando el totalFinal seguro)
+    if (idClienteReal) {
       const recompensaExistente = await prisma.cliente_recompensas.findFirst({
-        where: { id_cliente: idCliente, estado: 'activa' }
+        where: { id_cliente: idClienteReal, estado: 'activa' }
       });
 
       if (!recompensaExistente) {
-        // Busca todas las reglas de recompensa
         const reglas = await prisma.recompensas.findMany({
           where: { activo: true },
-          orderBy: { puntosrequeridos: 'desc' } // Revisa la más cara primero
+          orderBy: { puntosrequeridos: 'desc' }
         });
 
         for (const regla of reglas) {
-          // Si el total de la compra CUMPLE la condición de la regla
-          if (parseFloat(nuevoPedido.total) >= parseFloat(regla.puntosrequeridos)) {
-            // Asigna esta recompensa al cliente
+          if (totalFinal >= parseFloat(regla.puntosrequeridos)) {
             await prisma.cliente_recompensas.create({
               data: {
-                id_cliente: idCliente,
+                id_cliente: idClienteReal,
                 id_recompensa: regla.id_recompensa,
-                estado: 'activa' // Lista para su siguiente compra
+                estado: 'activa'
               }
             });
-            break; // Solo asigna la primera que cumpla (la más alta)
+            break; 
           }
         }
       }
@@ -597,19 +704,23 @@ app.get('/api/admin/orders', autenticarUsuario, esPersonalAutorizado(['Administr
     let statusFilter;
     let orderByFilter;
 
+    // LÓGICA DE PESTAÑAS
     if (status === 'completed') {
-      // 🛠️ CORRECCIÓN: Buscamos "Completado", no "Listo"
-      statusFilter = { in: ['Completado', 'Cancelado'] }; 
-      orderByFilter = { fechapedido: 'desc' }; 
+      // Pestaña "Historial": Busca pedidos terminados
+      // 🛠️ IMPORTANTE: Incluimos 'Completado' (tu nuevo estándar) y 'Listo' (por si quedaron viejos)
+      statusFilter = { in: ['Completado', 'Listo', 'Cancelado'] }; 
+      orderByFilter = { fechapedido: 'desc' }; // Lo más nuevo arriba
     } else {
-      statusFilter = { in: ['Pendiente', 'En preparación', 'Listo'] };
-      orderByFilter = { fechapedido: 'asc' }; 
-    } 
-    // 3. Usamos el filtro dinámico en la consulta
+      // Pestaña "Activos": Busca pedidos por atender
+      // 🛠️ IMPORTANTE: Debe incluir 'Pendiente'
+      statusFilter = { in: ['Pendiente', 'En preparación'] };
+      orderByFilter = { fechapedido: 'asc' }; // Lo más viejo arriba (urgente)
+    }
+
     const pedidos = await prisma.pedidos.findMany({
       where: {
         activo: true,
-        estado: statusFilter // <-- 🛠️ FILTRO DINÁMICO
+        estado: statusFilter // <-- Aquí aplica el filtro
       },
       include: {
         clientes: { select: { nombre: true } },
@@ -618,26 +729,32 @@ app.get('/api/admin/orders', autenticarUsuario, esPersonalAutorizado(['Administr
           include: { productos: { select: { nombre: true } } }
         }
       },
-      orderBy: orderByFilter // <-- 🛠️ ORDEN DINÁMICO
+      orderBy: orderByFilter
     });
 
-    const pedidosFormateados = pedidos.map(p => ({
-      id_pedido: p.id_pedido,
-      cliente: p.clientes.nombre,
-      producto: p.detalle_pedido[0] ? p.detalle_pedido[0].productos.nombre : 'N/A',
-      cantidad: p.detalle_pedido[0] ? p.detalle_pedido[0].cantidad : 0,
-      hora: new Date(p.fechapedido).toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' }),
-      estado: p.estado,
-      total: p.total,
-      metodo_pago: p.metodo_pago,
-      monto_pago_con: p.monto_pago_con
-    }));
+    const pedidosFormateados = pedidos.map(p => {
+      const fechaObj = new Date(p.fechapedido); // Creamos el objeto fecha una vez
+      
+      return {
+        id_pedido: p.id_pedido,
+        cliente: p.clientes?.nombre || "Cliente General",
+        producto: p.detalle_pedido[0] ? p.detalle_pedido[0].productos.nombre : 'Varios',
+        cantidad: p.detalle_pedido[0] ? p.detalle_pedido[0].cantidad : 0,
+        fecha: fechaObj.toLocaleDateString('es-MX'), 
+        hora: fechaObj.toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' }),
+        estado: p.estado,
+        total: p.total,
+        metodo_pago: p.metodo_pago,
+        monto_pago_con: p.monto_pago_con
+      };
+    });
 
-    res.json(pedidosFormateados);
-  } catch (error) {
-    console.error("Error al obtener pedidos:", error);
-    res.status(500).json({ error: 'Error interno del servidor' });
-  }
+        res.json(pedidosFormateados);
+
+      } catch (error) {
+        console.error("Error al obtener pedidos:", error);
+        res.status(500).json({ error: 'Error interno del servidor' });
+      }
 });
 
 // --- 2. ACTUALIZAR EL ESTADO DE UN PEDIDO 
@@ -665,8 +782,8 @@ app.put('/api/admin/orders/:id/status', autenticarUsuario, esPersonalAutorizado(
 
 // ============ RUTAS DE INVENTARIO (ADMIN) ===============
 //=========================================================
-
-app.post('/api/admin/products', autenticarUsuario, esAdmin, upload.single('imagen'), async (req, res) => {
+//
+app.post('/api/admin/products', autenticarUsuario, esAdmin, upload.single('imagen'), validate(productSchema), async (req, res) => {
   try {
     const { nombre, sku, descripcion, precioBase, id_categoria, stockproductosterminados } = req.body;
 
@@ -675,11 +792,19 @@ app.post('/api/admin/products', autenticarUsuario, esAdmin, upload.single('image
     }
     const imagenURL = `/uploads/${req.file.filename}`;
 
+    const existeImagen = await prisma.productos.findFirst({
+      where: { imagenurl: imagenURL }
+    });
+
+    if (existeImagen) {
+      return res.status(409).json({ error: 'Error interno: nombre de imagen duplicado. Intenta de nuevo.' });
+    }
+
     const nuevoProducto = await prisma.productos.create({
       data: {
-        sku: sku,
-        nombre: nombre,
-        descripcion: descripcion,
+        sku,
+        nombre,
+        descripcion,
         preciobase: parseFloat(precioBase),
         id_categoria: parseInt(id_categoria),
         stockproductosterminados: parseInt(stockproductosterminados),
@@ -688,13 +813,12 @@ app.post('/api/admin/products', autenticarUsuario, esAdmin, upload.single('image
     });
     res.status(201).json(nuevoProducto);
   } catch (error) {
-    console.error("Error al crear producto:", error);
-    res.status(500).json({ error: 'Error interno del servidor' });
+    handlePrismaError(res, error, "Error al crear producto");
   }
 });
 
 // 2. ACTUALIZAR UN PRODUCTO
-app.put('/api/admin/products/:id', autenticarUsuario, esAdmin, upload.single('imagen'), async (req, res) => {
+app.put('/api/admin/products/:id', autenticarUsuario, esAdmin, upload.single('imagen'), validate(productSchema), async (req, res) => {
   try {
     const { id } = req.params;
     const { sku, nombre, descripcion, precioBase, id_categoria, stockProductosTerminados } = req.body;
@@ -738,6 +862,53 @@ app.delete('/api/admin/products/:id', autenticarUsuario, esAdmin, async (req, re
   }
 });
 
+// ============ RUTAS DE RECETAS (ADMIN) ===============
+//=========================================================
+
+// --- 1. OBTENER RECETA DE UN PRODUCTO ---
+app.get('/api/admin/products/:id/recipe', autenticarUsuario, esAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const receta = await prisma.product_ingredients.findMany({
+      where: { id_producto: parseInt(id) },
+      include: { ingredientes: true } // Incluimos nombres para mostrar en el frontend
+    });
+    res.json(receta);
+  } catch (error) {
+    console.error("Error al obtener receta:", error);
+    res.status(500).json({ error: 'Error interno del servidor' });
+  }
+});
+
+// --- 2. GUARDAR (ACTUALIZAR) RECETA ---
+app.post('/api/admin/products/:id/recipe', autenticarUsuario, esAdmin, validate(recipeSchema),  async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { ingredientes } = req.body;
+
+      await prisma.$transaction(async (tx) => {
+        await tx.product_ingredients.deleteMany({
+          where: { id_producto: parseInt(id) }
+        });
+
+        if (ingredientes && ingredientes.length > 0) {
+          await tx.product_ingredients.createMany({
+            data: ingredientes.map(item => ({
+              id_producto: parseInt(id),
+              id_ingrediente: parseInt(item.id_ingrediente),
+              cantidadrequerida: parseFloat(item.cantidad)
+            }))
+          });
+        }
+      });
+
+      res.json({ message: 'Receta actualizada correctamente' });
+
+    } catch (error) {
+      handlePrismaError(res, error, "Error al guardar receta");
+    }
+});
+
 
 // ============ INGREDIENTES (ADMIN) ===============
 //=========================================================
@@ -756,7 +927,7 @@ app.get('/api/admin/ingredients', autenticarUsuario, esPersonalAutorizado(['Admi
 });
 
 // B. CREAR UN NUEVO INGREDIENTE
-app.post('/api/admin/ingredients', autenticarUsuario, esAdmin, async (req, res) => {
+app.post('/api/admin/ingredients', autenticarUsuario, esAdmin, validate(ingredientSchema), async (req, res) => {
   try {
     const { sku, nombre, stockactual, stockminimo, unidadmedida, id_proveedor } = req.body;
     
@@ -778,7 +949,7 @@ app.post('/api/admin/ingredients', autenticarUsuario, esAdmin, async (req, res) 
 });
 
 // C. ACTUALIZAR UN INGREDIENTE
-app.put('/api/admin/ingredients/:id', autenticarUsuario, esAdmin, async (req, res) => {
+app.put('/api/admin/ingredients/:id', autenticarUsuario, esAdmin, validate(ingredientSchema), async (req, res) => {
   try {
     const { id } = req.params;
     const { sku, nombre, stockactual, stockminimo, unidadmedida, id_proveedor } = req.body;
@@ -817,6 +988,68 @@ app.delete('/api/admin/ingredients/:id', autenticarUsuario, esAdmin, async (req,
 });
 
 
+// =============================================
+// ============ RUTA DE PRODUCCIÓN (NUEVA) =====
+// =============================================
+// Convierte Ingredientes -> Productos Terminados
+
+app.post('/api/admin/inventory/produce', autenticarUsuario, esAdmin, async (req, res) => {
+  const { id_producto, cantidad } = req.body; 
+
+  try {
+    const cantidadProducir = parseInt(cantidad);
+    if (isNaN(cantidadProducir) || cantidadProducir <= 0) {
+      return res.status(400).json({ error: 'Cantidad inválida' });
+    }
+
+    // 1. Obtener la receta del producto
+    const receta = await prisma.product_ingredients.findMany({
+      where: { id_producto: parseInt(id_producto) },
+      include: { ingredientes: true } // Traemos datos del ingrediente (stock actual)
+    });
+
+    if (receta.length === 0) {
+      return res.status(400).json({ error: 'Este producto no tiene una receta registrada (ingredientes).' });
+    }
+
+    // 2. Iniciar Transacción (Verificar y Descontar)
+    await prisma.$transaction(async (tx) => {
+      
+      // A. Verificar stock de ingredientes suficiente
+      for (const item of receta) {
+        const cantidadNecesaria = parseFloat(item.cantidadrequerida) * cantidadProducir;
+        const stockActual = parseFloat(item.ingredientes.stockactual);
+
+        if (stockActual < cantidadNecesaria) {
+          throw new Error(`No hay suficiente ${item.ingredientes.nombre}. Requieres ${cantidadNecesaria} ${item.ingredientes.unidadmedida}, tienes ${stockActual}.`);
+        }
+
+        // B. Descontar Ingrediente
+        await tx.ingredientes.update({
+          where: { id_ingrediente: item.id_ingrediente },
+          data: { stockactual: stockActual - cantidadNecesaria }
+        });
+      }
+
+      // C. Aumentar Stock de Producto Terminado
+      await tx.productos.update({
+        where: { id_producto: parseInt(id_producto) },
+        data: { 
+          stockproductosterminados: { increment: cantidadProducir } 
+        }
+      });
+    });
+
+    res.json({ message: `¡Producción registrada! Se agregaron ${cantidadProducir} unidades al inventario.` });
+
+  } catch (error) {
+    console.error("Error en producción:", error);
+    // Enviamos el mensaje de error específico (ej. "No hay suficiente Huevo")
+    res.status(400).json({ error: error.message || 'Error al registrar producción' });
+  }
+});
+
+
 // ============ RUTAS DE PROVEEDORES (ADMIN) ===============
 //==========================================================
 // A. OBTENER TODOS LOS PROVEEDORES 
@@ -834,46 +1067,44 @@ app.get('/api/admin/suppliers', autenticarUsuario, esAdmin, async (req, res) => 
 });
 
 // B. CREAR UN NUEVO PROVEEDOR 
-app.post('/api/admin/suppliers', autenticarUsuario, esAdmin, async (req, res) => {
-  try {
-    // Obtenemos los datos del body. Todos son strings.
-    const { nombre, contacto, telefono, rfc } = req.body;
-    
-    const nuevoProveedor = await prisma.proveedores.create({
-      data: {
-        nombre,
-        contacto,
-        telefono,
-        rfc
-      }
-    });
-    res.status(201).json(nuevoProveedor);
-  } catch (error) {
-    console.error("Error al crear proveedor:", error);
-    res.status(500).json({ error: 'Error interno del servidor' });
-  }
+app.post('/api/admin/suppliers', 
+  autenticarUsuario, 
+  esAdmin, 
+  validate(supplierSchema), 
+  async (req, res) => {
+    try {
+      const { nombre, contacto, telefono, rfc } = req.body;
+      
+      const nuevoProveedor = await prisma.proveedores.create({
+        data: { nombre, contacto, telefono, rfc }
+      });
+      res.status(201).json(nuevoProveedor);
+
+    } catch (error) {
+      handlePrismaError(res, error, "Error al crear proveedor:");
+    }
 });
 
-// C. ACTUALIZAR UN PROVEEDOR 
-app.put('/api/admin/suppliers/:id', autenticarUsuario, esAdmin, async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { nombre, contacto, telefono, rfc } = req.body;
+// --- 3. ACTUALIZAR UN PROVEEDOR  ---
+app.put('/api/admin/suppliers/:id', 
+  autenticarUsuario, 
+  esAdmin, 
+  validate(supplierSchema),
+  async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { nombre, contacto, telefono, rfc } = req.body;
 
-    const proveedorActualizado = await prisma.proveedores.update({
-      where: { id_proveedor: parseInt(id) },
-      data: {
-        nombre,
-        contacto,
-        telefono,
-        rfc
-      }
-    });
-    res.json(proveedorActualizado);
-  } catch (error) {
-    console.error("Error al actualizar proveedor:", error);
-    res.status(500).json({ error: 'Error interno del servidor' });
-  }
+      const proveedorActualizado = await prisma.proveedores.update({
+        where: { id_proveedor: parseInt(id) },
+        data: { nombre, contacto, telefono, rfc }
+      });
+      res.json(proveedorActualizado);
+
+    } catch (error) {
+      // 🛠️ USAMOS LA NUEVA FUNCIÓN AQUÍ
+      handlePrismaError(res, error, "Error al actualizar proveedor:");
+    }
 });
 
 // D. ELIMINAR (DESACTIVAR) UN PROVEEDOR
@@ -920,7 +1151,7 @@ app.get('/api/admin/clients', autenticarUsuario, esAdmin, async (req, res) => {
 });
 
 // --- 2. CREAR UN NUEVO CLIENTE ---
-app.post('/api/admin/clients', autenticarUsuario, esAdmin, async (req, res) => {
+app.post('/api/admin/clients', autenticarUsuario, esAdmin, validate(clientSchema), async (req, res) => {
   const { nombre, correoelectronico, contrasena, telefono } = req.body;
 
   try {
@@ -966,7 +1197,7 @@ app.post('/api/admin/clients', autenticarUsuario, esAdmin, async (req, res) => {
 });
 
 // --- 3. ACTUALIZAR UN CLIENTE ---
-app.put('/api/admin/clients/:id', autenticarUsuario, esAdmin, async (req, res) => {
+app.put('/api/admin/clients/:id', autenticarUsuario, esAdmin, validate(clientSchema), async (req, res) => {
   try {
     const { id: idCliente } = req.params;
     const { nombre, correoelectronico, telefono } = req.body;
@@ -1062,7 +1293,7 @@ app.get('/api/admin/cashiers', autenticarUsuario, esAdmin, async (req, res) => {
 });
 
 // B. CREAR UN NUEVO CAJERO 
-app.post('/api/admin/cashiers', autenticarUsuario, esAdmin, async (req, res) => {
+app.post('/api/admin/cashiers', autenticarUsuario, esAdmin, validate(cashierSchema), async (req, res) => {
   // Nota: Faltan 'usuario' y 'telefono' porque no están en el schema.prisma
   const { nombrecompleto, correoelectronico, contrasena, turno } = req.body;
 
@@ -1115,7 +1346,7 @@ app.post('/api/admin/cashiers', autenticarUsuario, esAdmin, async (req, res) => 
 });
 
 // C. ACTUALIZAR UN CAJERO
-app.put('/api/admin/cashiers/:id', autenticarUsuario, esAdmin, async (req, res) => {
+app.put('/api/admin/cashiers/:id', autenticarUsuario, esAdmin, validate(cashierSchema), async (req, res) => {
   try {
     const { id: idEmpleado } = req.params;
     const { nombrecompleto, correoelectronico, turno } = req.body;
