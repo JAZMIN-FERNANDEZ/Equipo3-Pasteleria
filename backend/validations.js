@@ -45,12 +45,12 @@ export const clientSchema = z.object({
 
 // --- 3. ESQUEMA PARA PRODUCTOS ---
 export const productSchema = z.object({
-  sku: z.string().min(3).max(50),
-  nombre: z.string().min(3).max(100),
-  descripcion: z.string().max(500).optional().or(z.literal('')),
-  precioBase: z.coerce.number().positive("El precio debe ser mayor a 0"),
+  sku: z.string().trim().min(3).max(5).regex(/^[0-9A-Z]+$/, "El SKU solo puede tener números y letras mayúsculas, con mínimo 3 y máximo 5 caracteres"),
+  nombre: nameRules,
+  descripcion: z.string().optional().or(z.literal('')),
+    precioBase: z.coerce.number().positive("El precio debe ser mayor a 0"),
   id_categoria: z.coerce.number().int().positive(),
-  stockproductosterminados: z.coerce.number().int().min(0, "El stock no puede ser negativo")
+  stockProductosTerminados: z.coerce.number().int().min(0, "El stock no puede ser negativo") 
 });
 
 // --- 4. ESQUEMA PARA INGREDIENTES ---
@@ -71,7 +71,7 @@ export const supplierSchema = z.object({
   rfc: z.string()
     .trim() 
     .length(13, "El RFC debe tener exactamente 13 caracteres")
-    .regex(/^[a-zA-Z0-9ñÑ]+$/, "El RFC solo puede contener letras y números (sin espacios)")
+    .regex(/^[A-Z0-9Ñ]+$/, "El RFC solo puede contener letras mayúsculas y números (sin espacios)")
     .optional()
     .or(z.literal(''))
 });

@@ -1,9 +1,10 @@
-
 import React, { useState, useEffect, useCallback } from 'react';
 import apiClient from '../api';
 import PaymentModal from '../components/PaymentModal';
 import EditStatusModal from '../components/EditStatusModal';
 import { useAuth } from '../context/AuthContext'; 
+import OrderDetailsModal from '../components/OrderDetailsModal';
+import { act } from 'react';
 
 function GestionPedidosPage() {
   const [pedidos, setPedidos] = useState([]);
@@ -14,8 +15,11 @@ function GestionPedidosPage() {
 
   // Estados para los modales
   const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
-  const [isEditModalOpen, setIsEditModalOpen] = useState(false); // Estado para el modal de edición
+  const [isEditModalOpen, setIsEditModalOpen] = useState(false); 
+  const [isDetailsModalOpen, setIsDetailsModalOpen] = useState(false);
   const [selectedOrder, setSelectedOrder] = useState(null);
+
+
 
   // --- 3. Obtén si es Admin ---
   const { user } = useAuth();
@@ -66,6 +70,16 @@ function GestionPedidosPage() {
     fetchPedidos();
   };
 
+  // --- Funciones Modal Detalles ---
+  const handleOpenDetailsModal = (pedido) => {
+    setSelectedOrder(pedido);
+    setIsDetailsModalOpen(true);
+  };
+  const handleCloseDetailsModal = () => {
+    setSelectedOrder(null);
+    setIsDetailsModalOpen(false);
+  };
+
   const filteredPedidos = pedidos.filter(pedido =>
     pedido.cliente.toLowerCase().includes(searchTerm.toLowerCase()) ||
     String(pedido.id_pedido).includes(searchTerm)
@@ -92,6 +106,12 @@ function GestionPedidosPage() {
           onSaveSuccess={handleSaveSuccess}
         />
       )}
+
+      <OrderDetailsModal 
+        isOpen={isDetailsModalOpen}
+        onClose={handleCloseDetailsModal}
+        order={selectedOrder}
+      />
 
       <div className="bg-white p-8 rounded-lg shadow-lg max-w-7xl mx-auto">
         <h1 className="text-3xl font-bold text-gray-800 mb-6">Gestión de Pedidos</h1>
@@ -129,12 +149,10 @@ function GestionPedidosPage() {
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Método Pago</th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Total</th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Estado</th>
-                  
-                  {/* 🛠️ CORRECCIÓN 5: La columna "Acción" se muestra si hay acciones disponibles */}
+                  <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase">Acción</th>
+                  {/* La columna "Acción" se muestra si hay acciones disponibles */}
                   {/* (Si es pestaña Activos O si eres Admin en cualquier pestaña) */}
-                  {(activeTab === 'activos' || isAdmin) && (
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Acción</th>
-                  )}
+                  
                 </tr>
               </thead>
               <tbody className="bg-white divide-y divide-gray-200">
@@ -157,10 +175,19 @@ function GestionPedidosPage() {
                     </td>
                     
                     {/* 🛠️ CORRECCIÓN 6: Lógica de Botones */}
-                    {(activeTab === 'activos' || isAdmin) && (
+                    
                       <td className="px-6 py-4 text-sm font-medium space-x-2">
                         
-                        {/* Botón de Cobrar: Solo en Activos */}
+                        {/* 1. BOTÓN VER DETALLES (Siempre visible para todos) */}
+                        <button
+                          onClick={() => handleOpenDetailsModal(pedido)}
+                          className="text-indigo-600 hover:text-indigo-900"
+                          title="Ver productos y detalles"
+                        >
+                          Ver Detalles
+                        </button>
+
+                        {/* 2. BOTÓN PROCESAR PAGO (Solo en 'activos') */}
                         {activeTab === 'activos' && (
                           <button
                             onClick={() => handleOpenPaymentModal(pedido)}
@@ -170,7 +197,7 @@ function GestionPedidosPage() {
                           </button>
                         )}
 
-                        {/* Botón de Editar: Solo Admin (Siempre visible) */}
+                        {/* 3. BOTÓN EDITAR ESTADO (Solo Admin, siempre visible) */}
                         {isAdmin && (
                           <button
                             onClick={() => handleOpenEditModal(pedido)}
@@ -179,8 +206,9 @@ function GestionPedidosPage() {
                             Editar Estado
                           </button>
                         )}
+
                       </td>
-                    )}
+                    
                   </tr>
                 ))}
               </tbody>

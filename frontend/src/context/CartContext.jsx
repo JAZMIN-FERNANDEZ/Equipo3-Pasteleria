@@ -67,7 +67,26 @@ export function CartProvider({ children }) {
       console.error("Error al borrar del carrito:", error);
     }
   };
-  
+
+  const updateItemQuantity = async (cartItemId, newQuantity) => {
+    try {
+      await apiClient.put(`/cart/${cartItemId}`, { cantidad: newQuantity });
+      await fetchCart(); // Recarga todo para recalcular subtotales/descuentos
+    } catch (error) {
+      // El interceptor mostrará el error (ej. "Stock insuficiente")
+      console.error("Error al actualizar cantidad:", error);
+    }
+  };
+
+  const clearCartAPI = async () => {
+    try {
+      await apiClient.delete('/cart'); // Borra todo en la BD
+      await fetchCart(); // El estado local se limpiará al recargar
+    } catch (error) {
+      console.error("Error al vaciar carrito:", error);
+    }
+  };
+
   // Función para limpiar localmente
   const clearLocalCart = () => {
     setCartItems([]);
@@ -77,10 +96,12 @@ export function CartProvider({ children }) {
     setTotalFinal(0);
   };
 
-  return (
+return (
     <CartContext.Provider value={{ 
-      cartItems, addToCart, removeFromCart, loading, clearLocalCart,
-      recompensa, subtotal, descuento, totalFinal // <-- 🛠️ Pasa los nuevos valores
+      cartItems, addToCart, removeFromCart, 
+      updateItemQuantity, clearCartAPI, 
+      loading, clearLocalCart, 
+      recompensa, subtotal, descuento, totalFinal 
     }}>
       {children}
     </CartContext.Provider>

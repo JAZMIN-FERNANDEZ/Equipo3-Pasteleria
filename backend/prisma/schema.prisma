@@ -116,6 +116,7 @@ model pedidos {
   activo         Boolean?         @default(true)
   metodo_pago    String?          @db.VarChar(50)
   monto_pago_con Decimal?         @db.Decimal(10, 2)
+  descuento      Decimal?         @default(0) @db.Decimal(10, 2)
   detalle_pedido detalle_pedido[]
   clientes       clientes         @relation(fields: [id_cliente], references: [id_cliente], onDelete: NoAction, onUpdate: NoAction, map: "fk_pedidos_clientes")
   empleados      empleados?       @relation(fields: [id_empleado], references: [id_empleado], onDelete: NoAction, onUpdate: NoAction, map: "fk_pedidos_empleados")
@@ -149,6 +150,7 @@ model productos {
   stockproductosterminados Int?                  @default(0)
   activo                   Boolean?              @default(true)
   imagenurl                String?               @db.VarChar(255)
+  imagehash                String?               @db.VarChar
   carrito_items            carrito_items[]
   detalle_pedido           detalle_pedido[]
   product_ingredients      product_ingredients[]

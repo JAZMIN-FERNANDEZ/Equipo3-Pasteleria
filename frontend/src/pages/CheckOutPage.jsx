@@ -3,24 +3,23 @@ import { useNavigate } from 'react-router-dom';
 import { useCart } from '../context/CartContext';
 import { useAuth } from '../context/AuthContext';
 import apiClient from '../api';
+import toast from 'react-hot-toast'; 
 
 function CheckoutPage() {
   const navigate = useNavigate();
-  // 1. Usamos 'totalFinal' que ya incluye descuentos
+  // Usamos 'totalFinal' que viene del contexto (con descuentos aplicados)
   const { totalFinal, clearLocalCart } = useCart();
   const { user } = useAuth();
   
   const [metodoPago, setMetodoPago] = useState(null);
   const [montoPagoCon, setMontoPagoCon] = useState('');
-  const [error, setError] = useState(null);
   const [loading, setLoading] = useState(false);
+  // Eliminamos el estado 'error' local
 
   const handleCheckout = async () => {
-    console.log("Iniciando checkout..."); // Debug
-
-    // --- VALIDACIONES ---
+    // --- VALIDACIONES LOCALES (Usando Toast) ---
     if (!metodoPago) {
-      setError("Por favor, selecciona un método de pago.");
+      toast.error("Por favor, selecciona un método de pago.");
       return;
     }
 
@@ -30,53 +29,58 @@ function CheckoutPage() {
       const totalNum = parseFloat(totalFinal);
 
       if (!montoPagoCon || isNaN(montoNum)) {
-        setError("Por favor, ingresa el monto con el que vas a pagar.");
+        toast.error("Ingresa el monto con el que vas a pagar.");
         return;
       }
 
-      // Usamos una pequeña tolerancia para evitar errores de decimales flotantes
+      // Tolerancia de centavos para evitar errores de punto flotante
       if (montoNum < totalNum - 0.01) {
-        setError(`El monto a pagar ($${montoNum.toFixed(2)}) es menor al total ($${totalNum.toFixed(2)}).`);
+        toast.error(`El monto ($${montoNum.toFixed(2)}) no cubre el total ($${totalNum.toFixed(2)}).`);
         return;
       }
     }
 
     setLoading(true);
-    setError(null);
-
-    const esCajero = user.rol === 'Cajero';
+    const esVentaEnTienda = user.rol === 'Cajero' || user.rol === 'Administrador';
 
     try {
       const payload = {
         metodoPago: metodoPago,
-        // Convertimos a float o enviamos null
+        // Convertimos a float o enviamos null si no es efectivo
         montoPagoCon: metodoPago === 'Efectivo' ? parseFloat(montoPagoCon) : null,
         total: totalFinal, 
         estado: esCajero ? 'Completado' : undefined 
       };
 
-      console.log("Enviando payload:", payload); // Debug
-
       // 1. Llamar al backend
       const response = await apiClient.post('/orders', payload);
+      
+      // Verificación de seguridad
+      if (!response.data || !response.data.id_pedido) {
+        throw new Error("La respuesta del servidor no contiene el ID del pedido.");
+      }
+
       const orderId = response.data.id_pedido;
 
-      console.log("Pedido creado:", orderId); // Debug
-
-      // 2. Limpiar carrito
+      // 2. Limpiar carrito localmente (para que se vea vacío al navegar)
       clearLocalCart();
 
-      // 3. Redirección
+      // 3. Feedback y Redirección
       if (esCajero) {
-        alert(`¡Venta en tienda #${orderId} completada con éxito!`);
-        navigate('/gestion/pedidos'); 
+        toast.success(`¡Venta #${orderId} registrada correctamente!`);
+        navigate('/admin/pedidos'); 
       } else {
+        toast.success("¡Pedido realizado con éxito!");
         navigate(`/confirmation/${orderId}`);
       }
 
     } catch (err) {
-      console.error("Error al finalizar el checkout:", err);
-      setError(err.response?.data?.error || "No se pudo procesar el pedido.");
+      console.error("Error en checkout:", err);
+      // Si el error vino del backend (Axios), el interceptor ya mostró el Toast.
+      // Solo si es un error de lógica local (JS) mostramos uno genérico aquí.
+      if (!err.response) {
+        toast.error("Ocurrió un error inesperado al procesar la venta.");
+      }
     } finally {
       setLoading(false);
     }
@@ -102,10 +106,7 @@ function CheckoutPage() {
           {['Efectivo', 'Tarjeta', 'Transferencia'].map((metodo) => (
             <button
               key={metodo}
-              onClick={() => {
-                setMetodoPago(metodo);
-                setError(null); // Limpiar error al cambiar método
-              }}
+              onClick={() => setMetodoPago(metodo)}
               className={`w-full p-4 border rounded-lg text-lg font-medium transition flex justify-between items-center ${
                 metodoPago === metodo 
                   ? 'bg-blue-500 text-white border-blue-500 shadow-md' 
@@ -147,12 +148,7 @@ function CheckoutPage() {
           </div>
         )}
 
-        {error && (
-          <div className="bg-red-100 border-l-4 border-red-500 text-red-700 p-4 mb-4" role="alert">
-            <p>{error}</p>
-          </div>
-        )}
-        
+        {/* Botones de Acción */}
         <div className="flex flex-col gap-3">
           <button
             onClick={handleCheckout}
