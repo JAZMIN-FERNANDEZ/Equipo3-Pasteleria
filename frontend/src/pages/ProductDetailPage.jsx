@@ -197,7 +197,7 @@ function ProductDetailPage() {
                   </p>
                   {stockDisponible === 0 && (
                     <p className="text-xs text-red-600">
-                      Producto solo disponible en mostrador.
+                      Producto Agotado. No se puede agregar al carrito.
                     </p>
                   )}
                 </div>

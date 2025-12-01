@@ -431,6 +431,7 @@ function InventoryAdminPage() {
                 <table className="min-w-full divide-y divide-gray-200">
                   <thead className="bg-gray-50">
                     <tr>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Imagen</th>
                       <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">SKU</th>
                       <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Nombre</th>
                       <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Precio</th>
@@ -440,8 +441,17 @@ function InventoryAdminPage() {
                   </thead>
                   <tbody className="bg-white divide-y divide-gray-200">
                     {filteredProducts.map((product) => (
-                      // 🛠️ CORRECCIÓN: Fila roja si stock < 2
+                      
                       <tr key={product.id_producto} className={product.stockproductosterminados < 2 ? "bg-red-100" : ""}>
+                        <td className="px-6 py-4">
+                          <img 
+                            src={product.imagenurl ? `${BACKEND_URL}${product.imagenurl}` : 'https://via.placeholder.com/150?text=No+Image'} 
+                            alt={product.nombre} 
+                            className="w-16 h-16 object-cover rounded"
+                            // Si la imagen falla (ej. 404), pone el placeholder automáticamente
+                            onError={(e) => { e.target.src = 'https://via.placeholder.com/150?text=Error'; }}
+                          />
+                        </td>
                         <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{product.sku}</td>
                         <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{product.nombre}</td>
                         <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${parseFloat(product.preciobase).toFixed(2)}</td>

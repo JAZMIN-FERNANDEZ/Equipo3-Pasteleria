@@ -57,6 +57,10 @@ const router = createBrowserRouter([
         path: "cart",
         element: <CartPage />,
       },
+      { 
+        path: "checkout",
+         element: <CheckoutPage /> 
+        },
 
       // --- Rutas de Cliente ---
       {
@@ -90,16 +94,6 @@ const router = createBrowserRouter([
         ]
       },
 
-      // --- Rutas de Cliente y Cajero ---
-
-      {
-        element: <ProtectedRoute allowedRoles={['Cajero', 'Cliente']} />,
-        children: [
-          { path: "product/:id", element: <ProductDetailPage /> },
-          { path: "cart", element: <CartPage /> },
-          { path: "checkout", element: <CheckoutPage /> }
-        ]
-      }
 
     ]
   }
