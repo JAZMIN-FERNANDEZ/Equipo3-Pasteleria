@@ -515,17 +515,29 @@ app.post('/api/orders', autenticarUsuario, async (req, res) => {
     const nuevoPedido = await prisma.$transaction(async (tx) => {
       let clientePedidoId;
       let empleadoPedidoId = null;
+
+      // 1. Lógica de Roles (Cliente vs Cajero/Admin)
       if (rolUsuarioAuth === 'Cliente') {
-        const cliente = await tx.clientes.findUnique({ where: { id_usuario: idUsuarioAuth }, select: { id_cliente: true } });
+        const cliente = await tx.clientes.findUnique({ 
+            where: { id_usuario: idUsuarioAuth }, 
+            select: { id_cliente: true } 
+        });
         if (!cliente) throw new Error('Usuario no es un cliente válido.');
         clientePedidoId = cliente.id_cliente;
       } else if (rolUsuarioAuth === 'Cajero' || rolUsuarioAuth === 'Administrador') {
-        const empleado = await tx.empleados.findUnique({ where: { id_usuario: idUsuarioAuth }, select: { id_empleado: true }});
-        empleadoPedidoId = empleado.id_empleado;
+        const empleado = await tx.empleados.findUnique({ 
+            where: { id_usuario: idUsuarioAuth }, 
+            select: { id_empleado: true }
+        });
+        // Si es Admin y no tiene empleado asociado, esto podría fallar, 
+        // pero asumimos que tu Admin tiene registro en empleados.
+        if (empleado) empleadoPedidoId = empleado.id_empleado;
+        
+        // ID del cliente genérico "Venta en Tienda" (Asegúrate que sea el 6 o el que corresponda en tu BD)
         clientePedidoId = 6; 
       }
 
-      // Obtener carrito
+      // 2. Obtener carrito
       const itemsDelCarrito = await tx.carrito_items.findMany({
         where: { id_usuario: idUsuarioAuth },
         include: { productos: true }
@@ -551,61 +563,63 @@ app.post('/api/orders', autenticarUsuario, async (req, res) => {
           personalizacion: item.personalizacion
         });
 
-        // 🛠️ CORRECCIÓN CRÍTICA DE INVENTARIO:
-        // Restamos 'item.cantidad', NO '1'.
+        // Descontar Stock
         await tx.productos.update({
           where: { id_producto: item.id_producto },
           data: { 
             stockproductosterminados: { 
-              decrement: item.cantidad // Usamos 'decrement' para ser atómicos y seguros
+              decrement: item.cantidad 
             } 
           }
         });
       }
 
-      // Consumir Recompensa (si aplica)
+      // 3. Consumir Recompensa (Solo si es Cliente)
       if (rolUsuarioAuth === 'Cliente') {
-        // ... (Lógica idéntica a la anterior) ...
         const recompensaActiva = await tx.cliente_recompensas.findFirst({ where: { id_cliente: clientePedidoId, estado: 'activa' } });
         if (recompensaActiva) {
           await tx.cliente_recompensas.update({ where: { id_clienterecompensa: recompensaActiva.id_clienterecompensa }, data: { estado: 'canjeada' } });
         }
       }
 
-      // Crear Pedido
+      // 4. Crear Pedido
       const pedido = await tx.pedidos.create({
         data: {
           id_cliente: clientePedidoId,
           id_empleado: empleadoPedidoId,
-          total: total, // O el recalculado si usaste la versión segura anterior
-          descuento: descuentoAplicado || 0,
+          total: parseFloat(total), // Aseguramos que sea número
+          
+          // 🛠️ CORRECCIÓN: El campo en la BD se llama 'descuento', no 'recompensa'
+          descuento: descuentoAplicado ? parseFloat(descuentoAplicado) : 0, 
+          
           estado: estado || 'Pendiente',
           metodo_pago: metodoPago,
           monto_pago_con: metodoPago === 'Efectivo' ? parseFloat(montoPagoCon) : null
         }
       });
 
-      // Guardar Detalles
+      // 5. Guardar Detalles
       await tx.detalle_pedido.createMany({
         data: itemsParaDetalle.map(item => ({ ...item, id_pedido: pedido.id_pedido }))
       });
 
-      // Limpiar Carrito
+      // 6. Limpiar Carrito
       await tx.carrito_items.deleteMany({ where: { id_usuario: idUsuarioAuth } });
 
       return pedido;
     });
 
-    // Asignar Nueva Recompensa (Lógica post-venta idéntica a la anterior)
-    // ...
+    // Lógica post-venta de asignar nuevas recompensas (opcional, va aquí)
 
     res.status(201).json({ id_pedido: nuevoPedido.id_pedido, estado: nuevoPedido.estado });
 
   } catch (error) {
     console.error("Error al crear el pedido:", error);
+    // Usamos handlePrismaError si lo tienes, o el genérico
     res.status(400).json({ error: error.message || 'Error interno del servidor' });
   }
 });
+
 
 // ============ RUTAS DE GESTIÓN DE PEDIDOS ====================
 // (Accesible por Admin y Cajero)

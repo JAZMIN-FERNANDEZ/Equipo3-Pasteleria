@@ -178,9 +178,18 @@ function ProductionModal({ isOpen, onClose, onProduce, product }) {
 // ===   MODAL PARA AGREGAR/EDITAR PRODUCTO     ===
 // ================================================
 function ProductModal({ isOpen, onClose, onSave, product }) {
-  const [formData, setFormData] = useState({ sku: '', nombre: '', descripcion: '', id_categoria: 1, precioBase: 0, stockProductosTerminados: 0 });
+  const [formData, setFormData] = useState({
+    sku: '',
+    nombre: '',
+    descripcion: '',
+    id_categoria: 1,
+    precioBase: 0,
+    stockProductosTerminados: 0
+  });
   const [imagenFile, setImagenFile] = useState(null);
   const isEditMode = Boolean(product);
+
+  const originalStock = product?.stockproductosterminados || 0;
 
   useEffect(() => {
     if (isEditMode && product) {
@@ -199,27 +208,95 @@ function ProductModal({ isOpen, onClose, onSave, product }) {
     }
   }, [isOpen, product, isEditMode]);
 
-  const handleChange = (e) => { const { name, value } = e.target; setFormData(prev => ({ ...prev, [name]: value })); };
-  const handleFileChange = (e) => { setImagenFile(e.target.files[0]); };
-  const handleSubmit = (e) => { e.preventDefault(); onSave(formData, imagenFile, product?.id_producto); };
+  const handleChange = (e) => {
+    const { name, value } = e.target;
+
+    // VALIDACIÓN DE STOCK: No permitir aumentar en modo edición
+    if (isEditMode && name === 'stockProductosTerminados') {
+      const nuevoStock = parseInt(value) || 0;
+      if (nuevoStock > originalStock) {
+        toast.error(`Para aumentar el stock, utiliza el botón "Producir".`);
+        return; // Bloquea el cambio
+      }
+    }
+
+    setFormData(prev => ({ ...prev, [name]: value }));
+  };
+
+  const handleFileChange = (e) => {
+    setImagenFile(e.target.files[0]);
+  };
+
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    onSave(formData, imagenFile, product?.id_producto);
+  };
 
   if (!isOpen) return null;
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 overflow-y-auto">
       <div className="bg-white p-6 rounded-lg shadow-lg w-full max-w-md my-8">
-        <h2 className="text-xl font-bold mb-4">{isEditMode ? 'Editar Producto' : 'Agregar Producto'}</h2>
+        <h2 className="text-xl font-bold mb-4">
+          {isEditMode ? 'Editar Producto' : 'Agregar Producto'}
+        </h2>
         <form onSubmit={handleSubmit} className="space-y-3">
-           <div><label htmlFor="sku" className="block text-sm font-medium text-gray-700">SKU</label><input type="text" name="sku" id="sku" value={formData.sku} onChange={handleChange} className="w-full px-3 py-2 border border-gray-300 rounded-md" required /></div>
-          <div><label htmlFor="nombre" className="block text-sm font-medium text-gray-700">Nombre</label><input type="text" name="nombre" id="nombre" value={formData.nombre} onChange={handleChange} className="w-full px-3 py-2 border border-gray-300 rounded-md" required /></div>
-          <div><label htmlFor="descripcion" className="block text-sm font-medium text-gray-700">Descripción</label><textarea name="descripcion" id="descripcion" value={formData.descripcion} onChange={handleChange} className="w-full px-3 py-2 border border-gray-300 rounded-md" /></div>
-          <div><label htmlFor="id_categoria" className="block text-sm font-medium text-gray-700">Categoría</label><select name="id_categoria" id="id_categoria" value={formData.id_categoria} onChange={handleChange} className="w-full px-3 py-2 border border-gray-300 rounded-md"><option value={1}>Pasteles</option><option value={2}>Galletas</option><option value={3}>Cupcakes</option><option value={4}>Bebidas</option></select></div>
-          <div className="grid grid-cols-2 gap-4">
-            <div><label htmlFor="precioBase" className="block text-sm font-medium text-gray-700">Precio</label><input type="number" name="precioBase" id="precioBase" step="0.01" value={formData.precioBase} onChange={handleChange} className="w-full px-3 py-2 border border-gray-300 rounded-md" /></div>
-            <div><label htmlFor="stockProductosTerminados" className="block text-sm font-medium text-gray-700">Stock</label><input type="number" name="stockProductosTerminados" id="stockProductosTerminados" value={formData.stockProductosTerminados} onChange={handleChange} className="w-full px-3 py-2 border border-gray-300 rounded-md" /></div>
+           <div>
+            <label htmlFor="sku" className="block text-sm font-medium text-gray-700">SKU</label>
+            <input type="text" name="sku" id="sku" value={formData.sku} onChange={handleChange} className="w-full px-3 py-2 border border-gray-300 rounded-md" required />
           </div>
-          <div><label htmlFor="imagen" className="block text-sm font-medium text-gray-700">Imagen</label><input type="file" name="imagen" id="imagen" onChange={handleFileChange} className="w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100" />{isEditMode && !imagenFile && <span className="text-xs text-gray-500">Dejar en blanco para conservar la imagen actual.</span>}</div>
-          <div className="flex justify-end space-x-2 pt-2"><button type="button" onClick={onClose} className="bg-gray-200 hover:bg-gray-300 text-gray-800 font-bold py-2 px-4 rounded-md">Cancelar</button><button type="submit" className="bg-blue-500 hover:bg-blue-600 text-white font-bold py-2 px-4 rounded-md">Guardar</button></div>
+          <div>
+            <label htmlFor="nombre" className="block text-sm font-medium text-gray-700">Nombre</label>
+            <input type="text" name="nombre" id="nombre" value={formData.nombre} onChange={handleChange} className="w-full px-3 py-2 border border-gray-300 rounded-md" required />
+          </div>
+          <div>
+            <label htmlFor="descripcion" className="block text-sm font-medium text-gray-700">Descripción</label>
+            <textarea name="descripcion" id="descripcion" value={formData.descripcion} onChange={handleChange} className="w-full px-3 py-2 border border-gray-300 rounded-md" />
+          </div>
+          <div>
+            <label htmlFor="id_categoria" className="block text-sm font-medium text-gray-700">Categoría</label>
+            <select name="id_categoria" id="id_categoria" value={formData.id_categoria} onChange={handleChange} className="w-full px-3 py-2 border border-gray-300 rounded-md">
+              <option value={1}>Pasteles</option>
+              <option value={2}>Galletas</option>
+              <option value={3}>Cupcakes</option>
+              <option value={4}>Bebidas</option>
+            </select>
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label htmlFor="precioBase" className="block text-sm font-medium text-gray-700">Precio</label>
+              <input type="number" name="precioBase" id="precioBase" step="0.01" value={formData.precioBase} onChange={handleChange} className="w-full px-3 py-2 border border-gray-300 rounded-md" />
+            </div>
+            <div>
+              <label htmlFor="stockProductosTerminados" className="block text-sm font-medium text-gray-700">Stock</label>
+              <input
+                type="number"
+                name="stockProductosTerminados"
+                id="stockProductosTerminados"
+                // Bloquea negativos y, si es edición, bloquea números mayores al actual
+                min="0"
+                max={isEditMode ? originalStock : undefined}
+                value={formData.stockProductosTerminados}
+                onChange={handleChange}
+                className={`w-full px-3 py-2 border rounded-md ${isEditMode ? 'bg-yellow-50 border-yellow-300' : 'border-gray-300'}`}
+              />
+              {/* Mensaje de Ayuda Visual */}
+              {isEditMode && (
+                <p className="text-xs text-yellow-700 mt-1">
+                  * Solo para ajustes de merma. Para agregar, usa <strong>"Producir"</strong>.
+                </p>
+              )}
+            </div>
+          </div>
+          <div>
+            <label htmlFor="imagen" className="block text-sm font-medium text-gray-700">Imagen</label>
+            <input type="file" name="imagen" id="imagen" onChange={handleFileChange} className="w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100" />
+            {isEditMode && !imagenFile && <span className="text-xs text-gray-500">Dejar en blanco para conservar la imagen actual.</span>}
+          </div>
+          <div className="flex justify-end space-x-2 pt-2">
+            <button type="button" onClick={onClose} className="bg-gray-200 hover:bg-gray-300 text-gray-800 font-bold py-2 px-4 rounded-md">Cancelar</button>
+            <button type="submit" className="bg-blue-500 hover:bg-blue-600 text-white font-bold py-2 px-4 rounded-md">Guardar</button>
+          </div>
         </form>
       </div>
     </div>
