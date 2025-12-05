@@ -10,6 +10,7 @@ const BACKEND_URL = 'http://localhost:3000';
 function RecipeModal({ isOpen, onClose, product, allIngredients }) {
   const [recipeItems, setRecipeItems] = useState([]);
   const [loading, setLoading] = useState(false);
+  
 
   // Cargar la receta existente
   useEffect(() => {
@@ -149,24 +150,106 @@ function RecipeModal({ isOpen, onClose, product, allIngredients }) {
 // ================================================
 function ProductionModal({ isOpen, onClose, onProduce, product }) {
   const [cantidad, setCantidad] = useState(1);
-  useEffect(() => { if (isOpen) setCantidad(1); }, [isOpen]);
+  const [tamanos, setTamanos] = useState([]); 
+  const [selectedTamano, setSelectedTamano] = useState('');
+  const [loadingAttributes, setLoadingAttributes] = useState(false);
+
+  // Cargar tamaños al abrir el modal
+  useEffect(() => {
+    if (isOpen && product) {
+      setCantidad(1);
+      setTamanos([]);
+      setSelectedTamano('');
+      setLoadingAttributes(true);
+
+      // Llamamos a la API para ver si este producto tiene tamaños configurados
+      apiClient.get(`/products/${product.id_producto}`)
+        .then(res => {
+          const attrTamaño = res.data.atributos.find(a => a.nombreatributo === 'Tamaño');
+          if (attrTamaño && attrTamaño.attribute_options.length > 0) {
+            setTamanos(attrTamaño.attribute_options);
+            // Seleccionar el primero por defecto para evitar errores
+            setSelectedTamano(attrTamaño.attribute_options[0].id_opcion);
+          }
+        })
+        .catch(err => console.error("Error cargando atributos:", err))
+        .finally(() => setLoadingAttributes(false));
+    }
+  }, [isOpen, product]);
+
   const handleSubmit = (e) => {
     e.preventDefault();
-    onProduce(product.id_producto, cantidad);
+    // Validar que si hay tamaños, se haya seleccionado uno
+    if (tamanos.length > 0 && !selectedTamano) {
+      toast.error("Por favor selecciona un tamaño.");
+      return;
+    }
+    onProduce(product.id_producto, cantidad, selectedTamano);
   };
+
   if (!isOpen || !product) return null;
+
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
       <div className="bg-white p-6 rounded-lg shadow-lg w-full max-w-sm">
         <h2 className="text-xl font-bold mb-2">Registrar Producción</h2>
-        <p className="text-gray-600 mb-4">Producto: <span className="font-semibold text-gray-800">{product.nombre}</span></p>
-        <p className="text-sm text-yellow-600 mb-4 bg-yellow-50 p-2 rounded">⚠️ Esto descontará los ingredientes necesarios.</p>
+        <p className="text-gray-600 mb-4">
+          Producto: <span className="font-semibold text-gray-800">{product.nombre}</span>
+        </p>
+        
+        <div className="bg-blue-50 p-3 rounded-md mb-4 text-sm text-blue-800">
+          ℹ️ Al confirmar, se descontarán los ingredientes del inventario automáticamente.
+        </div>
+
         <form onSubmit={handleSubmit}>
-          <label className="block text-sm font-medium text-gray-700 mb-1">Cantidad a Producir:</label>
-          <input type="number" min="1" value={cantidad} onChange={(e) => setCantidad(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-md mb-6" autoFocus />
+          
+          {/* Selector de Tamaño (Solo si el producto tiene tamaños) */}
+          {loadingAttributes ? (
+            <p className="text-sm text-gray-500 mb-4">Cargando tamaños...</p>
+          ) : tamanos.length > 0 ? (
+            <div className="mb-4">
+               <label className="block text-sm font-medium text-gray-700 mb-1">Tamaño a Producir:</label>
+               <select 
+                 value={selectedTamano}
+                 onChange={(e) => setSelectedTamano(e.target.value)}
+                 className="w-full border p-2 rounded focus:ring-2 focus:ring-purple-500 outline-none"
+               >
+                 {tamanos.map(t => (
+                   <option key={t.id_opcion} value={t.id_opcion}>
+                     {t.nombreopcion} {t.factor ? `(x${t.factor} insumos)` : ''}
+                   </option>
+                 ))}
+               </select>
+            </div>
+          ) : null}
+
+          <div className="mb-6">
+            <label className="block text-sm font-medium text-gray-700 mb-1">Cantidad a Producir:</label>
+            <input
+              type="number"
+              min="1"
+              step="1"
+              value={cantidad}
+              onChange={(e) => setCantidad(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-purple-500 outline-none"
+              autoFocus
+            />
+          </div>
+          
           <div className="flex justify-end space-x-2">
-            <button type="button" onClick={onClose} className="bg-gray-200 hover:bg-gray-300 text-gray-800 font-bold py-2 px-4 rounded-md">Cancelar</button>
-            <button type="submit" className="bg-purple-600 hover:bg-purple-700 text-white font-bold py-2 px-4 rounded-md">Confirmar</button>
+            <button
+              type="button"
+              onClick={onClose}
+              className="bg-gray-200 hover:bg-gray-300 text-gray-800 font-bold py-2 px-4 rounded-md transition"
+            >
+              Cancelar
+            </button>
+            <button
+              type="submit"
+              className="bg-purple-600 hover:bg-purple-700 text-white font-bold py-2 px-4 rounded-md transition shadow-md"
+            >
+              Confirmar Producción
+            </button>
           </div>
         </form>
       </div>
@@ -178,9 +261,18 @@ function ProductionModal({ isOpen, onClose, onProduce, product }) {
 // ===   MODAL PARA AGREGAR/EDITAR PRODUCTO     ===
 // ================================================
 function ProductModal({ isOpen, onClose, onSave, product }) {
-  const [formData, setFormData] = useState({ sku: '', nombre: '', descripcion: '', id_categoria: 1, precioBase: 0, stockProductosTerminados: 0 });
+  const [formData, setFormData] = useState({
+    sku: '',
+    nombre: '',
+    descripcion: '',
+    id_categoria: 1,
+    precioBase: 0,
+    stockProductosTerminados: 0
+  });
   const [imagenFile, setImagenFile] = useState(null);
   const isEditMode = Boolean(product);
+
+  const originalStock = product?.stockproductosterminados || 0;
 
   useEffect(() => {
     if (isEditMode && product) {
@@ -199,27 +291,95 @@ function ProductModal({ isOpen, onClose, onSave, product }) {
     }
   }, [isOpen, product, isEditMode]);
 
-  const handleChange = (e) => { const { name, value } = e.target; setFormData(prev => ({ ...prev, [name]: value })); };
-  const handleFileChange = (e) => { setImagenFile(e.target.files[0]); };
-  const handleSubmit = (e) => { e.preventDefault(); onSave(formData, imagenFile, product?.id_producto); };
+  const handleChange = (e) => {
+    const { name, value } = e.target;
+
+    // VALIDACIÓN DE STOCK: No permitir aumentar en modo edición
+    if (isEditMode && name === 'stockProductosTerminados') {
+      const nuevoStock = parseInt(value) || 0;
+      if (nuevoStock > originalStock) {
+        toast.error(`Para aumentar el stock, utiliza el botón "Producir".`);
+        return; // Bloquea el cambio
+      }
+    }
+
+    setFormData(prev => ({ ...prev, [name]: value }));
+  };
+
+  const handleFileChange = (e) => {
+    setImagenFile(e.target.files[0]);
+  };
+
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    onSave(formData, imagenFile, product?.id_producto);
+  };
 
   if (!isOpen) return null;
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 overflow-y-auto">
       <div className="bg-white p-6 rounded-lg shadow-lg w-full max-w-md my-8">
-        <h2 className="text-xl font-bold mb-4">{isEditMode ? 'Editar Producto' : 'Agregar Producto'}</h2>
+        <h2 className="text-xl font-bold mb-4">
+          {isEditMode ? 'Editar Producto' : 'Agregar Producto'}
+        </h2>
         <form onSubmit={handleSubmit} className="space-y-3">
-           <div><label htmlFor="sku" className="block text-sm font-medium text-gray-700">SKU</label><input type="text" name="sku" id="sku" value={formData.sku} onChange={handleChange} className="w-full px-3 py-2 border border-gray-300 rounded-md" required /></div>
-          <div><label htmlFor="nombre" className="block text-sm font-medium text-gray-700">Nombre</label><input type="text" name="nombre" id="nombre" value={formData.nombre} onChange={handleChange} className="w-full px-3 py-2 border border-gray-300 rounded-md" required /></div>
-          <div><label htmlFor="descripcion" className="block text-sm font-medium text-gray-700">Descripción</label><textarea name="descripcion" id="descripcion" value={formData.descripcion} onChange={handleChange} className="w-full px-3 py-2 border border-gray-300 rounded-md" /></div>
-          <div><label htmlFor="id_categoria" className="block text-sm font-medium text-gray-700">Categoría</label><select name="id_categoria" id="id_categoria" value={formData.id_categoria} onChange={handleChange} className="w-full px-3 py-2 border border-gray-300 rounded-md"><option value={1}>Pasteles</option><option value={2}>Galletas</option><option value={3}>Cupcakes</option><option value={4}>Bebidas</option></select></div>
-          <div className="grid grid-cols-2 gap-4">
-            <div><label htmlFor="precioBase" className="block text-sm font-medium text-gray-700">Precio</label><input type="number" name="precioBase" id="precioBase" step="0.01" value={formData.precioBase} onChange={handleChange} className="w-full px-3 py-2 border border-gray-300 rounded-md" /></div>
-            <div><label htmlFor="stockProductosTerminados" className="block text-sm font-medium text-gray-700">Stock</label><input type="number" name="stockProductosTerminados" id="stockProductosTerminados" value={formData.stockProductosTerminados} onChange={handleChange} className="w-full px-3 py-2 border border-gray-300 rounded-md" /></div>
+           <div>
+            <label htmlFor="sku" className="block text-sm font-medium text-gray-700">SKU</label>
+            <input type="text" name="sku" id="sku" value={formData.sku} onChange={handleChange} className="w-full px-3 py-2 border border-gray-300 rounded-md" required />
           </div>
-          <div><label htmlFor="imagen" className="block text-sm font-medium text-gray-700">Imagen</label><input type="file" name="imagen" id="imagen" onChange={handleFileChange} className="w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100" />{isEditMode && !imagenFile && <span className="text-xs text-gray-500">Dejar en blanco para conservar la imagen actual.</span>}</div>
-          <div className="flex justify-end space-x-2 pt-2"><button type="button" onClick={onClose} className="bg-gray-200 hover:bg-gray-300 text-gray-800 font-bold py-2 px-4 rounded-md">Cancelar</button><button type="submit" className="bg-blue-500 hover:bg-blue-600 text-white font-bold py-2 px-4 rounded-md">Guardar</button></div>
+          <div>
+            <label htmlFor="nombre" className="block text-sm font-medium text-gray-700">Nombre</label>
+            <input type="text" name="nombre" id="nombre" value={formData.nombre} onChange={handleChange} className="w-full px-3 py-2 border border-gray-300 rounded-md" required />
+          </div>
+          <div>
+            <label htmlFor="descripcion" className="block text-sm font-medium text-gray-700">Descripción</label>
+            <textarea name="descripcion" id="descripcion" value={formData.descripcion} onChange={handleChange} className="w-full px-3 py-2 border border-gray-300 rounded-md" />
+          </div>
+          <div>
+            <label htmlFor="id_categoria" className="block text-sm font-medium text-gray-700">Categoría</label>
+            <select name="id_categoria" id="id_categoria" value={formData.id_categoria} onChange={handleChange} className="w-full px-3 py-2 border border-gray-300 rounded-md">
+              <option value={1}>Pasteles</option>
+              <option value={2}>Galletas</option>
+              <option value={3}>Cupcakes</option>
+              <option value={4}>Bebidas</option>
+            </select>
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label htmlFor="precioBase" className="block text-sm font-medium text-gray-700">Precio</label>
+              <input type="number" name="precioBase" id="precioBase" step="0.01" value={formData.precioBase} onChange={handleChange} className="w-full px-3 py-2 border border-gray-300 rounded-md" />
+            </div>
+            <div>
+              <label htmlFor="stockProductosTerminados" className="block text-sm font-medium text-gray-700">Stock</label>
+              <input
+                type="number"
+                name="stockProductosTerminados"
+                id="stockProductosTerminados"
+                // Bloquea negativos y, si es edición, bloquea números mayores al actual
+                min="0"
+                max={isEditMode ? originalStock : undefined}
+                value={formData.stockProductosTerminados}
+                onChange={handleChange}
+                className={`w-full px-3 py-2 border rounded-md ${isEditMode ? 'bg-yellow-50 border-yellow-300' : 'border-gray-300'}`}
+              />
+              {/* Mensaje de Ayuda Visual */}
+              {isEditMode && (
+                <p className="text-xs text-yellow-700 mt-1">
+                  * Solo para ajustes de merma. Para agregar, usa <strong>"Producir"</strong>.
+                </p>
+              )}
+            </div>
+          </div>
+          <div>
+            <label htmlFor="imagen" className="block text-sm font-medium text-gray-700">Imagen</label>
+            <input type="file" name="imagen" id="imagen" onChange={handleFileChange} className="w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100" />
+            {isEditMode && !imagenFile && <span className="text-xs text-gray-500">Dejar en blanco para conservar la imagen actual.</span>}
+          </div>
+          <div className="flex justify-end space-x-2 pt-2">
+            <button type="button" onClick={onClose} className="bg-gray-200 hover:bg-gray-300 text-gray-800 font-bold py-2 px-4 rounded-md">Cancelar</button>
+            <button type="submit" className="bg-blue-500 hover:bg-blue-600 text-white font-bold py-2 px-4 rounded-md">Guardar</button>
+          </div>
         </form>
       </div>
     </div>
@@ -356,7 +516,7 @@ function InventoryAdminPage() {
 
   // --- Funciones Receta y Producción ---
   
-  // 🛠️ CORRECCIÓN: Cargar ingredientes si no están cargados
+  // CORRECCIÓN: Cargar ingredientes si no están cargados
   const handleOpenRecipeModal = async (product) => {
     if (ingredients.length === 0) {
        await fetchIngredients(); 
@@ -369,23 +529,33 @@ function InventoryAdminPage() {
   
   const handleOpenProductionModal = (product) => { setProductionProduct(product); setIsProductionModalOpen(true); };
   const handleCloseProductionModal = () => { setIsProductionModalOpen(false); setProductionProduct(null); };
-  const handleProduce = async (idProducto, cantidad) => {
+  const handleProduce = async (idProducto, cantidad, idTamano) => {
     try {
-      const response = await apiClient.post('/admin/inventory/produce', { id_producto: idProducto, cantidad: parseInt(cantidad) });
-      alert(response.data.message);
-      fetchProducts();
+      // Enviamos el objeto correctamente estructurado
+      const payload = {
+        id_producto: idProducto,
+        cantidad: parseInt(cantidad),
+        id_opcion_tamano: idTamano || null // Enviamos null si está vacío
+      };
+
+      const response = await apiClient.post('/admin/inventory/produce', payload);
+      
+      toast.success(response.data.message);
+      fetchProducts(); // Actualiza la tabla de productos
+      fetchIngredients(); // Actualiza la tabla de ingredientes (para ver la resta)
       handleCloseProductionModal();
+
     } catch (error) {
-      alert(error.response?.data?.error || "Error al producir");
+      // El interceptor mostrará el error, pero por si acaso atrapamos lógica local
+      console.error("Error producción:", error);
     }
   };
-
   // --- Funciones CRUD Ingredientes ---
   const handleOpenAddIngredientModal = () => { setSelectedIngredient(null); setIsIngredientModalOpen(true); };
   const handleOpenEditIngredientModal = (ingredient) => { setSelectedIngredient(ingredient); setIsIngredientModalOpen(true); };
   const handleCloseIngredientModal = () => { setIsIngredientModalOpen(false); setSelectedIngredient(null); };
   const handleSaveIngredient = async (formData, ingredientId) => {
-    const isEditMode = Boolean(ingredientId);
+  const isEditMode = Boolean(ingredientId);
     try {
       if (isEditMode) await apiClient.put(`/admin/ingredients/${ingredientId}`, formData);
       else await apiClient.post('/admin/ingredients', formData);

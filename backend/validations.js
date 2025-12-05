@@ -48,9 +48,10 @@ export const productSchema = z.object({
   sku: z.string().trim().min(3).max(5).regex(/^[0-9A-Z]+$/, "El SKU solo puede tener números y letras mayúsculas, con mínimo 3 y máximo 5 caracteres"),
   nombre: nameRules,
   descripcion: z.string().optional().or(z.literal('')),
-    precioBase: z.coerce.number().positive("El precio debe ser mayor a 0"),
+  precioBase: z.coerce.number().positive("El precio debe ser mayor a 0"),
   id_categoria: z.coerce.number().int().positive(),
   stockProductosTerminados: z.coerce.number().int().min(0, "El stock no puede ser negativo") 
+
 });
 
 // --- 4. ESQUEMA PARA INGREDIENTES ---
@@ -93,6 +94,22 @@ export const recipeSchema = z.object({
     })
   ).nonempty("La receta debe tener al menos un ingrediente")
 });
+
+// --- 8. ESQUEMA PARA RECOMPENSAS ---
+export const rewardSchema = z.object({
+  nombrerecompensa: nameRules, // Usamos la regla de nombre estándar
+  descripcion: z.string().max(500, "La descripción es muy larga").optional().or(z.literal('')),
+  tipo: z.enum(['PORCENTAJE_DESCUENTO', 'MONTO_FIJO_DESCUENTO'], {
+    errorMap: () => ({ message: "El tipo de recompensa no es válido" })
+  }),
+  valor: z.coerce.number()
+    .positive("El valor del descuento debe ser mayor a 0")
+    .max(99, "El valor es excesivo"), // Límite de seguridad
+  puntosrequeridos: z.coerce.number()
+    .int()
+    .min(1, "El monto/puntos requeridos debe ser mayor a 0")
+});
+
 
 export const validate = (schema) => (req, res, next) => {
   try {

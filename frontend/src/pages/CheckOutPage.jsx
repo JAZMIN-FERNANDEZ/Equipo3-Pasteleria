@@ -7,46 +7,41 @@ import toast from 'react-hot-toast';
 
 function CheckoutPage() {
   const navigate = useNavigate();
-  // Usamos 'totalFinal' que viene del contexto (con descuentos aplicados)
   const { totalFinal, clearLocalCart } = useCart();
   const { user } = useAuth();
   
   const [metodoPago, setMetodoPago] = useState(null);
   const [montoPagoCon, setMontoPagoCon] = useState('');
   const [loading, setLoading] = useState(false);
-  // Eliminamos el estado 'error' local
 
   const handleCheckout = async () => {
-    // --- VALIDACIONES LOCALES (Usando Toast) ---
+    // --- VALIDACIONES ---
     if (!metodoPago) {
       toast.error("Por favor, selecciona un método de pago.");
       return;
     }
 
-    // Validación específica para efectivo
     if (metodoPago === 'Efectivo') {
       const montoNum = parseFloat(montoPagoCon);
       const totalNum = parseFloat(totalFinal);
 
       if (!montoPagoCon || isNaN(montoNum)) {
-        toast.error("Ingresa el monto con el que vas a pagar.");
+        toast.error("Por favor, ingresa el monto con el que vas a pagar.");
         return;
       }
 
-      // Tolerancia de centavos para evitar errores de punto flotante
       if (montoNum < totalNum - 0.01) {
-        toast.error(`El monto ($${montoNum.toFixed(2)}) no cubre el total ($${totalNum.toFixed(2)}).`);
+        toast.error(`El monto a pagar ($${montoNum.toFixed(2)}) es menor al total ($${totalNum.toFixed(2)}).`);
         return;
       }
     }
 
     setLoading(true);
-    const esVentaEnTienda = user.rol === 'Cajero' || user.rol === 'Administrador';
+    const esCajero = user.rol === 'Cajero' || user.rol === 'Administrador';
 
     try {
       const payload = {
         metodoPago: metodoPago,
-        // Convertimos a float o enviamos null si no es efectivo
         montoPagoCon: metodoPago === 'Efectivo' ? parseFloat(montoPagoCon) : null,
         total: totalFinal, 
         estado: esCajero ? 'Completado' : undefined 
@@ -57,35 +52,37 @@ function CheckoutPage() {
       
       // Verificación de seguridad
       if (!response.data || !response.data.id_pedido) {
-        throw new Error("La respuesta del servidor no contiene el ID del pedido.");
+        throw new Error("La respuesta del servidor no es válida.");
       }
 
       const orderId = response.data.id_pedido;
 
-      // 2. Limpiar carrito localmente (para que se vea vacío al navegar)
+      // 2. Limpiar carrito
       clearLocalCart();
 
-      // 3. Feedback y Redirección
+      // 3. Redirección y Mensaje de Éxito
       if (esCajero) {
-        toast.success(`¡Venta #${orderId} registrada correctamente!`);
-        navigate('/admin/pedidos'); 
+        // 🛠️ Ahora sí funcionará porque importamos 'toast'
+        toast.success(`¡Venta en tienda #${orderId} completada con éxito!`);
+        navigate('/gestion/pedidos'); 
       } else {
         toast.success("¡Pedido realizado con éxito!");
         navigate(`/confirmation/${orderId}`);
       }
 
     } catch (err) {
-      console.error("Error en checkout:", err);
-      // Si el error vino del backend (Axios), el interceptor ya mostró el Toast.
-      // Solo si es un error de lógica local (JS) mostramos uno genérico aquí.
+      console.error("Error al finalizar el checkout:", err);
+      // Si es un error de JS local (como el que tenías), mostramos esto:
       if (!err.response) {
-        toast.error("Ocurrió un error inesperado al procesar la venta.");
+        toast.error("Ocurrió un error inesperado en la aplicación.");
       }
+      // Si es error del servidor, el interceptor de Axios ya mostró el toast.
     } finally {
       setLoading(false);
     }
   };
 
+  // ... (El resto de tu componente y JSX se mantiene igual)
   // Función auxiliar para formato de moneda
   const formatCurrency = (val) => `$${parseFloat(val || 0).toFixed(2)}`;
 
@@ -93,7 +90,7 @@ function CheckoutPage() {
     <div className="bg-gray-100 min-h-screen flex items-center justify-center p-4">
       <div className="bg-white p-8 rounded-lg shadow-lg max-w-lg w-full">
         <h1 className="text-2xl font-bold text-center mb-6">
-          {user.rol === 'Cajero' ? 'Procesar Venta en Tienda' : 'Finalizar Pedido'}
+          {user.rol === 'Cajero' || user.rol === 'Administrador' ? 'Procesar Venta en Tienda' : 'Finalizar Pedido'}
         </h1>
         
         <div className="mb-4 text-center bg-gray-50 p-4 rounded-lg">
@@ -128,7 +125,7 @@ function CheckoutPage() {
         {metodoPago === 'Efectivo' && (
           <div className="mb-6 bg-blue-50 p-4 rounded-md border border-blue-100">
             <label htmlFor="montoPagoCon" className="block text-sm font-bold text-gray-700 mb-2">
-              {user.rol === 'Cajero' ? 'Monto Recibido ($):' : '¿Con cuánto vas a pagar? ($)'}
+              {user.rol === 'Cajero' || user.rol === 'Administrador' ? 'Monto Recibido ($):' : '¿Con cuánto vas a pagar? ($)'}
             </label>
             <input
               type="number"
@@ -147,15 +144,14 @@ function CheckoutPage() {
             )}
           </div>
         )}
-
-        {/* Botones de Acción */}
+        
         <div className="flex flex-col gap-3">
           <button
             onClick={handleCheckout}
             disabled={loading || !metodoPago}
             className="w-full bg-green-500 text-white font-bold py-4 px-6 rounded-lg transition duration-300 hover:bg-green-600 disabled:bg-gray-400 disabled:cursor-not-allowed shadow-lg"
           >
-            {loading ? 'Procesando...' : (user.rol === 'Cajero' ? 'Completar Venta' : 'Finalizar Pedido')}
+            {loading ? 'Procesando...' : (user.rol === 'Cajero' || user.rol === 'Administrador' ? 'Completar Venta' : 'Finalizar Pedido')}
           </button>
           
           <button
