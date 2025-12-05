@@ -14,6 +14,7 @@ model attribute_options {
   nombreopcion         String                 @db.VarChar(50)
   ajusteprecio         Decimal                @default(0) @db.Decimal(10, 2)
   activo               Boolean?               @default(true)
+  factor               Decimal?               @default(1.0) @db.Decimal(10, 2)
   product_attributes   product_attributes     @relation(fields: [id_atributo], references: [id_atributo], onDelete: NoAction, onUpdate: NoAction, map: "fk_ao_pa")
   orderitem_attributes orderitem_attributes[]
 }

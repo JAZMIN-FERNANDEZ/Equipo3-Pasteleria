@@ -1,4 +1,3 @@
-// 1. Importar las herramientas
 import express from 'express';
 import cors from 'cors';
 import path from 'path'; // Módulo para manejar rutas de archivos
@@ -8,7 +7,7 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { startOfMonth, endOfMonth, startOfWeek, endOfWeek } from 'date-fns';
 import { startOfDay, endOfDay, parseISO } from 'date-fns';
-import { validate, productSchema, ingredientSchema, supplierSchema, cashierSchema, registerSchema, clientSchema, recipeSchema} from './validations.js';
+import { validate, productSchema, ingredientSchema, supplierSchema, cashierSchema, registerSchema, clientSchema, recipeSchema, rewardSchema} from './validations.js';
 import crypto from 'crypto';
 import fs from 'fs';
 
@@ -57,7 +56,17 @@ const esPersonalAutorizado = (rolesPermitidos) => {
     next();
   };
 };
-const upload = multer({ storage: storage });
+const upload = multer({ 
+  storage: storage,
+  limits: { fileSize: 8 * 1024 * 1024 }, // Límite de 8MB
+  fileFilter: (req, file, cb) => {
+    if (file.mimetype.startsWith('image/')) {
+      cb(null, true);
+    } else {
+      cb(new Error('¡Solo se permiten imágenes!'));
+    }
+  }
+});
 
 // 2. Inicializar las herramientas
 const app = express();
@@ -261,7 +270,6 @@ app.post('/api/auth/register', validate(registerSchema), async (req, res) => {
   }
 });
 
-
 // ============ RUTAS DEL CARRITO ==============
 app.get('/api/cart', autenticarUsuario, async (req, res) => {
   try {
@@ -406,7 +414,6 @@ app.delete('/api/cart', autenticarUsuario, async (req, res) => {
   }
 });
 
-
 // ========= RUTA PARA OBTENER TODOS LOS PRODUCTOS (USADO EN INICIO) =========
 app.get('/api/products', async (req, res) => {
   try {
@@ -516,25 +523,37 @@ app.post('/api/orders', autenticarUsuario, async (req, res) => {
       let clientePedidoId;
       let empleadoPedidoId = null;
 
-      // 1. Lógica de Roles (Cliente vs Cajero/Admin)
+      // Lógica de Roles (Cliente vs Cajero/Admin)
       if (rolUsuarioAuth === 'Cliente') {
+        // Si es cliente, buscamos su propio ID
         const cliente = await tx.clientes.findUnique({ 
             where: { id_usuario: idUsuarioAuth }, 
             select: { id_cliente: true } 
         });
         if (!cliente) throw new Error('Usuario no es un cliente válido.');
         clientePedidoId = cliente.id_cliente;
+
       } else if (rolUsuarioAuth === 'Cajero' || rolUsuarioAuth === 'Administrador') {
+        // Buscamos el ID del empleado que está haciendo la venta
         const empleado = await tx.empleados.findUnique({ 
             where: { id_usuario: idUsuarioAuth }, 
             select: { id_empleado: true }
         });
-        // Si es Admin y no tiene empleado asociado, esto podría fallar, 
-        // pero asumimos que tu Admin tiene registro en empleados.
         if (empleado) empleadoPedidoId = empleado.id_empleado;
         
-        // ID del cliente genérico "Venta en Tienda" (Asegúrate que sea el 6 o el que corresponda en tu BD)
-        clientePedidoId = 6; 
+        // Buscamos el cliente "Mostrador" por su CORREO
+        const clienteMostrador = await tx.clientes.findFirst({
+          where: { 
+            usuarios: { correoelectronico: 'mostrador@dulsys.com' } 
+          },
+          select: { id_cliente: true }
+        });
+
+        if (!clienteMostrador) {
+          throw new Error("Error crítico: El cliente 'Venta en Tienda' (mostrador@dulsys.com) no existe en la BD.");
+        }
+        
+        clientePedidoId = clienteMostrador.id_cliente; 
       }
 
       // 2. Obtener carrito
@@ -575,26 +594,61 @@ app.post('/api/orders', autenticarUsuario, async (req, res) => {
       }
 
       // 3. Consumir Recompensa (Solo si es Cliente)
-      if (rolUsuarioAuth === 'Cliente') {
-        const recompensaActiva = await tx.cliente_recompensas.findFirst({ where: { id_cliente: clientePedidoId, estado: 'activa' } });
-        if (recompensaActiva) {
-          await tx.cliente_recompensas.update({ where: { id_clienterecompensa: recompensaActiva.id_clienterecompensa }, data: { estado: 'canjeada' } });
+    const totalPagado = parseFloat(total); 
+
+    if (rolUsuarioAuth === 'Cliente') {
+      // 1. Usamos el ID del nuevo pedido para saber quién compró
+      const idCliente = nuevoPedido.id_cliente;
+      
+      // 2. Revisamos si ya tiene una
+      const recompensaExistente = await prisma.cliente_recompensas.findFirst({
+        where: { id_cliente: idCliente, estado: 'activa' }
+      });
+
+      if (!recompensaExistente) {
+        const reglas = await prisma.recompensas.findMany({
+          where: { activo: true },
+          orderBy: { puntosrequeridos: 'desc' }
+        });
+
+        for (const regla of reglas) {
+          // 3. COMPARACIÓN CLAVE: Lo que pagó vs Lo que requiere la regla
+          if (totalPagado >= parseFloat(regla.puntosrequeridos)) {
+            
+            await prisma.cliente_recompensas.create({
+              data: {
+                id_cliente: idCliente,
+                id_recompensa: regla.id_recompensa,
+                estado: 'activa'
+              }
+            });
+            console.log(`¡Recompensa asignada al cliente ${idCliente}!`); // Log para depurar
+            break; 
+          }
         }
       }
+    }
 
-      // 4. Crear Pedido
+      const safeFloat = (valor) => {
+        const numero = parseFloat(valor);
+        return isNaN(numero) ? 0 : numero;
+      };
+
+      // 4. Crear el Pedido (BLINDADO)
       const pedido = await tx.pedidos.create({
         data: {
           id_cliente: clientePedidoId,
           id_empleado: empleadoPedidoId,
-          total: parseFloat(total), // Aseguramos que sea número
           
-          // 🛠️ CORRECCIÓN: El campo en la BD se llama 'descuento', no 'recompensa'
-          descuento: descuentoAplicado ? parseFloat(descuentoAplicado) : 0, 
+          total: safeFloat(total), 
+          
+          descuento: safeFloat(descuentoAplicado), 
           
           estado: estado || 'Pendiente',
           metodo_pago: metodoPago,
-          monto_pago_con: metodoPago === 'Efectivo' ? parseFloat(montoPagoCon) : null
+          
+          // Solo guardamos monto si es efectivo, y aseguramos que sea número
+          monto_pago_con: metodoPago === 'Efectivo' ? safeFloat(montoPagoCon) : null
         }
       });
 
@@ -619,7 +673,6 @@ app.post('/api/orders', autenticarUsuario, async (req, res) => {
     res.status(400).json({ error: error.message || 'Error interno del servidor' });
   }
 });
-
 
 // ============ RUTAS DE GESTIÓN DE PEDIDOS ====================
 // (Accesible por Admin y Cajero)
@@ -762,7 +815,7 @@ app.post('/api/admin/products', autenticarUsuario, esAdmin, upload.single('image
         id_categoria: parseInt(id_categoria),
         stockproductosterminados: parseInt(stockProductosTerminados),
         imagenurl: imagenURL,
-        imagehash: newFileHash // Guardamos el hash para proteger el futuro
+        imagehash: newFileHash 
       }
     });
 
@@ -1004,64 +1057,84 @@ app.delete('/api/admin/ingredients/:id', autenticarUsuario, esAdmin, async (req,
   }
 });
 
-
 // =============================================
 // ============ RUTA DE PRODUCCIÓN (NUEVA) =====
 // =============================================
 // Convierte Ingredientes -> Productos Terminados
 
 app.post('/api/admin/inventory/produce', autenticarUsuario, esAdmin, async (req, res) => {
-  const { id_producto, cantidad } = req.body; 
+  // Recibimos: id_producto, cantidad (a producir), id_opcion_tamano (opcional)
+  const { id_producto, cantidad, id_opcion_tamano } = req.body; 
 
   try {
     const cantidadProducir = parseInt(cantidad);
     if (isNaN(cantidadProducir) || cantidadProducir <= 0) {
-      return res.status(400).json({ error: 'Cantidad inválida' });
+      return res.status(400).json({ error: 'La cantidad a producir debe ser mayor a 0.' });
     }
-
-    // 1. Obtener la receta del producto
+    
+    // 1. Obtener la receta
     const receta = await prisma.product_ingredients.findMany({
       where: { id_producto: parseInt(id_producto) },
-      include: { ingredientes: true } // Traemos datos del ingrediente (stock actual)
+      include: { ingredientes: true }
     });
 
     if (receta.length === 0) {
-      return res.status(400).json({ error: 'Este producto no tiene una receta registrada (ingredientes).' });
+      return res.status(400).json({ error: 'Este producto NO tiene una receta configurada. Ve a "Receta" primero.' });
     }
 
-    // 2. Iniciar Transacción (Verificar y Descontar)
-    await prisma.$transaction(async (tx) => {
-      
-      // A. Verificar stock de ingredientes suficiente
-      for (const item of receta) {
-        const cantidadNecesaria = parseFloat(item.cantidadrequerida) * cantidadProducir;
-        const stockActual = parseFloat(item.ingredientes.stockactual);
+    // 2. Obtener el Factor del Tamaño
+    let factor = 1.0;
+    let nombreTamano = "Estándar";
 
-        if (stockActual < cantidadNecesaria) {
-          throw new Error(`No hay suficiente ${item.ingredientes.nombre}. Requieres ${cantidadNecesaria} ${item.ingredientes.unidadmedida}, tienes ${stockActual}.`);
+    if (id_opcion_tamano) {
+      const opcion = await prisma.attribute_options.findUnique({
+        where: { id_opcion: parseInt(id_opcion_tamano) }
+      });
+      if (opcion) {
+        factor = parseFloat(opcion.factor || 1.0); // Aseguramos que tenga un valor
+        nombreTamano = opcion.nombreopcion;
+      }
+    }
+
+    // 3. Transacción de Producción
+    await prisma.$transaction(async (tx) => {
+      for (const item of receta) {
+        const cantidadBase = parseFloat(item.cantidadrequerida);
+        
+        // Cálculo: (Base x Cantidad x Factor)
+        let totalRequerido = cantidadBase * cantidadProducir * factor;
+        
+        // Redondeo inteligente para piezas
+        const unidad = item.ingredientes.unidadmedida.toLowerCase();
+        if (['pza', 'pieza', 'unidad', 'unidades'].includes(unidad)) {
+            totalRequerido = Math.ceil(totalRequerido);
         }
 
-        // B. Descontar Ingrediente
+        const stockActual = parseFloat(item.ingredientes.stockactual);
+
+        // Validación de Stock
+        if (stockActual < totalRequerido) {
+          throw new Error(`Falta insumo: ${item.ingredientes.nombre}. Requieres ${totalRequerido.toFixed(2)} ${item.ingredientes.unidadmedida}, tienes ${stockActual.toFixed(2)}.`);
+        }
+
+        // Descontar Ingrediente
         await tx.ingredientes.update({
           where: { id_ingrediente: item.id_ingrediente },
-          data: { stockactual: stockActual - cantidadNecesaria }
+          data: { stockactual: stockActual - totalRequerido }
         });
       }
 
-      // C. Aumentar Stock de Producto Terminado
+      // Aumentar Stock de Producto Terminado
       await tx.productos.update({
         where: { id_producto: parseInt(id_producto) },
-        data: { 
-          stockproductosterminados: { increment: cantidadProducir } 
-        }
+        data: { stockproductosterminados: { increment: cantidadProducir } }
       });
     });
 
-    res.json({ message: `¡Producción registrada! Se agregaron ${cantidadProducir} unidades al inventario.` });
+    res.json({ message: `¡Éxito! Se produjeron ${cantidadProducir} ${nombreTamano}s.` });
 
   } catch (error) {
     console.error("Error en producción:", error);
-    // Enviamos el mensaje de error específico (ej. "No hay suficiente Huevo")
     res.status(400).json({ error: error.message || 'Error al registrar producción' });
   }
 });
@@ -1277,9 +1350,6 @@ app.delete('/api/admin/clients/:id', autenticarUsuario, esAdmin, async (req, res
   }
 });
 
-
-
-
 // ============ RUTAS DE CAJEROS (ADMIN) ===========
 //==================================================
 // A. OBTENER TODOS LOS CAJEROS 
@@ -1447,7 +1517,7 @@ app.get('/api/admin/rewards', autenticarUsuario, esAdmin, async (req, res) => {
 });
 
 // B. CREAR UNA NUEVA REGLA DE RECOMPENSA 
-app.post('/api/admin/rewards', autenticarUsuario, esAdmin, async (req, res) => {
+app.post('/api/admin/rewards', autenticarUsuario, esAdmin, validate(rewardSchema),async (req, res) => {
   try {
     // 'puntosrequeridos' lo usaremos como 'monto_requerido' o 'cantidad_requerida'
     const { nombrerecompensa, descripcion, tipo, valor, puntosrequeridos } = req.body;
@@ -1469,7 +1539,7 @@ app.post('/api/admin/rewards', autenticarUsuario, esAdmin, async (req, res) => {
 });
 
 // C. ACTUALIZAR UNA REGLA DE RECOMPENSA 
-app.put('/api/admin/rewards/:id', autenticarUsuario, esAdmin, async (req, res) => {
+app.put('/api/admin/rewards/:id', autenticarUsuario, esAdmin, validate(rewardSchema), async (req, res) => {
   try {
     const { id } = req.params;
     const { nombrerecompensa, descripcion, tipo, valor, puntosrequeridos } = req.body;
