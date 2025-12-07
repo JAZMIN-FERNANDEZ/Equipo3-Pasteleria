@@ -56,8 +56,8 @@ export const productSchema = z.object({
 
 // --- 4. ESQUEMA PARA INGREDIENTES ---
 export const ingredientSchema = z.object({
-  sku: z.string().min(3).max(50),
-  nombre: z.string().min(3).max(100),
+  sku: z.string().min(3).max(5).regex(/^[0-9A-Z]+$/, "El SKU solo puede tener números y letras mayúsculas, con mínimo 3 y máximo 5 caracteres"),
+  nombre: nameRules,
   stockactual: z.coerce.number().min(0),
   stockminimo: z.coerce.number().min(0),
   unidadmedida: z.string().min(1).max(20),
@@ -66,9 +66,9 @@ export const ingredientSchema = z.object({
 
 // --- 5. ESQUEMA PARA PROVEEDORES ---
 export const supplierSchema = z.object({
-  nombre: z.string().min(3).max(100),
-  contacto: z.string().max(100).optional().or(z.literal('')),
-  telefono: phoneRules.optional().or(z.literal('')),
+  nombre: nameRules,
+  contacto: nameRules,
+  telefono: phoneRules,
   rfc: z.string()
     .trim() 
     .length(13, "El RFC debe tener exactamente 13 caracteres")
@@ -80,7 +80,7 @@ export const supplierSchema = z.object({
 // --- 6. ESQUEMA PARA CAJEROS ---
 export const cashierSchema = z.object({
   nombrecompleto: nameRules,
-  correoelectronico: z.string().email(),
+  correoelectronico: z.string().email().max(100),
   contrasena: passwordRules.optional().or(z.literal('')),
   turno: z.enum(['Matutino', 'Vespertino', 'Nocturno'])
 });
@@ -97,17 +97,55 @@ export const recipeSchema = z.object({
 
 // --- 8. ESQUEMA PARA RECOMPENSAS ---
 export const rewardSchema = z.object({
-  nombrerecompensa: nameRules, // Usamos la regla de nombre estándar
+  nombrerecompensa: nameRules,
   descripcion: z.string().max(500, "La descripción es muy larga").optional().or(z.literal('')),
+  
   tipo: z.enum(['PORCENTAJE_DESCUENTO', 'MONTO_FIJO_DESCUENTO'], {
     errorMap: () => ({ message: "El tipo de recompensa no es válido" })
   }),
+  
   valor: z.coerce.number()
-    .positive("El valor del descuento debe ser mayor a 0")
-    .max(99, "El valor es excesivo"), // Límite de seguridad
+    .positive("El valor del descuento debe ser mayor a 0"),
+
   puntosrequeridos: z.coerce.number()
     .int()
-    .min(1, "El monto/puntos requeridos debe ser mayor a 0")
+    .min(1, "El monto mínimo de compra debe ser mayor a 0")
+})
+.superRefine((data, ctx) => {
+  
+  // Regla A: Porcentajes (Máximo 99%)
+  if (data.tipo === 'PORCENTAJE_DESCUENTO') {
+    if (data.valor > 99) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "El porcentaje no puede ser mayor al 99%",
+        path: ["valor"]
+      });
+    }
+  }
+
+  // Regla B: Montos Fijos
+  if (data.tipo === 'MONTO_FIJO_DESCUENTO') {
+    
+    // 1. Límite de seguridad ($1000)
+    if (data.valor >= 1000) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "El descuento fijo debe ser menor a $1,000.00",
+        path: ["valor"]
+      });
+    }
+
+    // 2. NUEVA REGLA: Descuento vs Compra Mínima
+    // Si te descuento 100, la compra mínima debe ser mayor a 100 (ej: 101)
+    if (data.valor >= data.puntosrequeridos) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `El descuento ($${data.valor}) no puede ser mayor o igual al gasto mínimo ($${data.puntosrequeridos})`,
+        path: ["valor"] // Marcamos el error en el campo valor
+      });
+    }
+  }
 });
 
 

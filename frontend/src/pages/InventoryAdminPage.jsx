@@ -504,13 +504,14 @@ function InventoryAdminPage() {
     try {
       if (isEditMode) await apiClient.put(`/admin/products/${productId}`, data, { headers: { 'Content-Type': 'multipart/form-data' } });
       else await apiClient.post('/admin/products', data, { headers: { 'Content-Type': 'multipart/form-data' } });
+      toast.success(isEditMode ? "Producto actualizado correctamente" : "Producto agregado correctamente");
       fetchProducts();
       handleCloseProductModal();
     } catch (error) { }
   };
   const handleDeleteProduct = async (productId) => {
     if (window.confirm("¿Eliminar producto?")) {
-      try { await apiClient.delete(`/admin/products/${productId}`); fetchProducts(); } catch (error) { }
+      try { await apiClient.delete(`/admin/products/${productId}`); toast.success("Producto eliminado correctamente"); fetchProducts(); } catch (error) { }
     }
   };
 
@@ -559,13 +560,14 @@ function InventoryAdminPage() {
     try {
       if (isEditMode) await apiClient.put(`/admin/ingredients/${ingredientId}`, formData);
       else await apiClient.post('/admin/ingredients', formData);
+      toast.success(isEditMode ? "Ingrediente actualizado correctamente" : "Ingrediente agregado correctamente");
       fetchIngredients();
       handleCloseIngredientModal();
     } catch (error) { }
   };
   const handleDeleteIngredient = async (ingredientId) => {
     if (window.confirm("¿Eliminar ingrediente?")) {
-      try { await apiClient.delete(`/admin/ingredients/${ingredientId}`); fetchIngredients(); } catch (error) { }
+      try { await apiClient.delete(`/admin/ingredients/${ingredientId}`); toast.success("Ingrediente eliminado correctamente"); fetchIngredients(); } catch (error) { }
     }
   };
 

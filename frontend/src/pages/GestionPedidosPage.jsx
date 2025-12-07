@@ -5,6 +5,7 @@ import EditStatusModal from '../components/EditStatusModal';
 import { useAuth } from '../context/AuthContext'; 
 import OrderDetailsModal from '../components/OrderDetailsModal';
 import { act } from 'react';
+import toast from 'react-hot-toast';
 
 function GestionPedidosPage() {
   const [pedidos, setPedidos] = useState([]);
@@ -55,6 +56,7 @@ function GestionPedidosPage() {
   };
   const handlePaymentSuccess = () => {
     fetchPedidos();
+    toast.success("Pago procesado correctamente");
   };
 
   // --- Funciones Modal Edición (Admin) ---
@@ -68,6 +70,7 @@ function GestionPedidosPage() {
   };
   const handleSaveSuccess = () => {
     fetchPedidos();
+    toast.success("Estado del pedido actualizado correctamente");
   };
 
   // --- Funciones Modal Detalles ---

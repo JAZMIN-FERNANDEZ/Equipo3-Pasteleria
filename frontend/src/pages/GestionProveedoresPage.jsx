@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import apiClient from '../api';
+import toast from 'react-hot-toast'; 
 
 // ================================================
 // ===   MODAL PARA AGREGAR/EDITAR PROVEEDOR    ===
@@ -168,8 +169,10 @@ function GestionProveedoresPage() {
     try {
       if (isEditMode) {
         await apiClient.put(`/admin/suppliers/${supplierId}`, formData);
+        toast.success("Proveedor actualizado correctamente");
       } else {
         await apiClient.post('/admin/suppliers', formData);
+        toast.success("Proveedor agregado correctamente");
       }
       // Recargar tabla y cerrar modal si todo salió bien
       fetchSuppliers(); 
@@ -179,15 +182,43 @@ function GestionProveedoresPage() {
     }
   };
 
-  const handleDeleteSupplier = async (supplierId) => {
-    if (window.confirm("¿Estás seguro de que quieres eliminar este proveedor?")) {
-      try {
-        await apiClient.delete(`/admin/suppliers/${supplierId}`);
-        fetchSuppliers(); 
-      } catch (error) {
-        // El interceptor maneja el error visual
-      }
-    }
+  const handleDeleteSupplier = (supplierId) => {
+    toast((t) => (
+      <div className="flex flex-col gap-2">
+        <p className="font-medium text-gray-800">
+          ¿Estás seguro de eliminar a este proveedor?
+        </p>
+        <div className="flex justify-end gap-2 mt-1">
+          <button
+            onClick={() => toast.dismiss(t.id)}
+            className="px-3 py-1 text-sm text-gray-600 bg-gray-200 rounded hover:bg-gray-300 transition"
+          >
+            Cancelar
+          </button>
+          <button
+            onClick={async () => {
+              toast.dismiss(t.id);
+              try {
+                // Endpoint verificado en tu backend (index.js)
+                await apiClient.delete(`/admin/suppliers/${supplierId}`);
+                toast.success("Proveedor eliminado correctamente");
+                fetchSuppliers(); // Recarga la tabla
+              } catch (error) {
+                console.error(error);
+                toast.error("Error al eliminar el proveedor");
+              }
+            }}
+            className="px-3 py-1 text-sm text-white bg-red-500 rounded hover:bg-red-600 transition"
+          >
+            Sí, eliminar
+          </button>
+        </div>
+      </div>
+    ), {
+      duration: Infinity,
+      position: 'top-center',
+      style: { border: '1px solid #E5E7EB', padding: '16px' },
+    });
   };
 
   // --- Lógica de Filtrado ---
