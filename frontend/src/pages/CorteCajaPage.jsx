@@ -34,9 +34,18 @@ function CorteCajaPage() {
   }, [fecha]); // Se vuelve a ejecutar si la fecha cambia
 
   // --- Cálculos de Totales (usando useMemo) ---
-  const { totalVentas, totalEfectivo, totalTarjeta, totalTransferencia } = useMemo(() => {
-    if (!reportData) return { totalVentas: 0, totalEfectivo: 0, totalTarjeta: 0, totalTransferencia: 0 };
+const { 
+    totalVentas, 
+    totalEfectivo, 
+    totalTarjeta, 
+    totalTransferencia,
+    totalProductosBruto 
+  } = useMemo(() => {
+    if (!reportData) return { 
+      totalVentas: 0, totalEfectivo: 0, totalTarjeta: 0, totalTransferencia: 0, totalProductosBruto: 0 
+    };
     
+    // 1. Sumar Ventas Reales (Neto)
     let total = 0;
     let efectivo = 0;
     let tarjeta = 0;
@@ -50,8 +59,23 @@ function CorteCajaPage() {
       if (metodo.metodo_pago === 'Transferencia') transferencia = suma;
     });
 
-    return { totalVentas: total, totalEfectivo: efectivo, totalTarjeta: tarjeta, totalTransferencia: transferencia };
+    // 2. Sumar Valor de Productos (Bruto / Precio Base)
+    // Esto es lo que "debería" haber ingresado si no hubiera descuentos
+    const totalProdBruto = reportData.productosVendidos.reduce((acc, item) => {
+      return acc + (parseFloat(item.total) || 0);
+    }, 0);
+
+    return { 
+      totalVentas: total, 
+      totalEfectivo: efectivo, 
+      totalTarjeta: tarjeta, 
+      totalTransferencia: transferencia,
+      totalProductosBruto: totalProdBruto // Retornamos el nuevo valor
+    };
   }, [reportData]);
+
+  // Cálculo del descuento global para mostrar en la UI
+  const totalDescuentos = totalProductosBruto - totalVentas;
 
 
   // --- Renderizado ---
@@ -126,7 +150,33 @@ function CorteCajaPage() {
                 </tbody>
               </table>
             </div>
+              <div className="mt-4 border-t pt-4 bg-gray-50 p-4 rounded-b-lg">
+              <div className="flex flex-col items-end space-y-2 text-sm">
+                
+                {/* 1. Valor Teórico (Precio Base) */}
+                <div className="flex justify-between w-full md:w-1/2 lg:w-1/3">
+                  <span className="text-gray-600">Valor total de productos (Precio base):</span>
+                  <span className="font-medium text-gray-800">${totalProductosBruto.toFixed(2)}</span>
+                </div>
+
+                {/* 2. Descuentos (La resta) */}
+                <div className="flex justify-between w-full md:w-1/2 lg:w-1/3 text-red-500">
+                  <span>(-) Descuentos aplicados:</span>
+                  <span className="font-medium">-${totalDescuentos.toFixed(2)}</span>
+                </div>
+
+                {/* Separador visual */}
+                <div className="w-full md:w-1/2 lg:w-1/3 border-b border-gray-300 my-1"></div>
+
+                {/* 3. Total Neto (Debe coincidir con Ventas Totales) */}
+                <div className="flex justify-between w-full md:w-1/2 lg:w-1/3 text-lg">
+                  <span className="font-bold text-gray-800">Total Neto (Ventas):</span>
+                  <span className="font-bold text-green-600">${totalVentas.toFixed(2)}</span>
+                </div>
+              </div>
+            </div>
           </div>
+          
 
           {/* --- Sección 3: Stock Actual de Ingredientes (IU Pág. 33) --- */}
           <div>

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import apiClient from '../api';
-import { Bar, Line, Pie } from 'react-chartjs-2'; 
+import { Bar, Line, Pie, Doughnut} from 'react-chartjs-2'; 
 import { 
   Chart as ChartJS, 
   CategoryScale, 
@@ -62,16 +62,20 @@ function GestionDashboardPage() {
     ],
   };
 
-  // --- Datos para el Gráfico 2: Ventas de la Semana (Líneas) ---
-  const weeklySalesData = {
-    labels: data?.ventasPorDia.map(d => d.dia) || [],
+  const categorySalesData = {
+    labels: data?.ventasPorCategoria?.map(c => c.categoria) || [],
     datasets: [
       {
-        label: 'Ventas de la Semana ($)',
-        data: data?.ventasPorDia.map(d => d.total) || [],
-        fill: false,
-        borderColor: 'rgba(59, 130, 246, 1)', // Azul
-        tension: 0.1
+        label: 'Productos Vendidos',
+        data: data?.ventasPorCategoria?.map(c => c.cantidad) || [],
+        backgroundColor: [
+          'rgba(54, 162, 235, 0.6)', // Azul
+          'rgba(255, 99, 132, 0.6)', // Rojo
+          'rgba(75, 192, 192, 0.6)', // Verde azulado
+          'rgba(255, 206, 86, 0.6)', // Amarillo
+          'rgba(153, 102, 255, 0.6)', // Morado
+        ],
+        borderWidth: 1,
       },
     ],
   };
@@ -141,10 +145,12 @@ function GestionDashboardPage() {
           <Bar options={chartOptions} data={topProductsData} />
         </div>
         
-        {/* Gráfico 2: Líneas (Ventas Semana) */}
         <div className="bg-white p-6 rounded-lg shadow-lg">
-          <h2 className="text-xl font-semibold text-gray-700 mb-4">Ventas de la Semana</h2>
-          <Line options={chartOptions} data={weeklySalesData} />
+          <h2 className="text-xl font-semibold text-gray-700 mb-4">Ventas por Categoría</h2>
+          <div className="w-full h-80 flex justify-center">
+             {/* Usamos Doughnut para variar, o puedes usar Bar si prefieres */}
+            <Doughnut options={pieChartOptions} data={categorySalesData} />
+          </div>
         </div>
 
         {/* Gráfico 3: Pastel (Tamaños) */}

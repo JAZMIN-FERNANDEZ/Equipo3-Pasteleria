@@ -519,13 +519,12 @@ app.post('/api/orders', autenticarUsuario, async (req, res) => {
   const { metodoPago, montoPagoCon, total, descuentoAplicado, estado } = req.body;
 
   try {
-    const nuevoPedido = await prisma.$transaction(async (tx) => {
+    const nuevoPedidoResultado = await prisma.$transaction(async (tx) => {
       let clientePedidoId;
       let empleadoPedidoId = null;
 
-      // Lógica de Roles (Cliente vs Cajero/Admin)
+      // --- 1. Lógica de Roles (Identificar quién es el cliente) ---
       if (rolUsuarioAuth === 'Cliente') {
-        // Si es cliente, buscamos su propio ID
         const cliente = await tx.clientes.findUnique({ 
             where: { id_usuario: idUsuarioAuth }, 
             select: { id_cliente: true } 
@@ -534,29 +533,24 @@ app.post('/api/orders', autenticarUsuario, async (req, res) => {
         clientePedidoId = cliente.id_cliente;
 
       } else if (rolUsuarioAuth === 'Cajero' || rolUsuarioAuth === 'Administrador') {
-        // Buscamos el ID del empleado que está haciendo la venta
         const empleado = await tx.empleados.findUnique({ 
             where: { id_usuario: idUsuarioAuth }, 
             select: { id_empleado: true }
         });
         if (empleado) empleadoPedidoId = empleado.id_empleado;
         
-        // Buscamos el cliente "Mostrador" por su CORREO
         const clienteMostrador = await tx.clientes.findFirst({
-          where: { 
-            usuarios: { correoelectronico: 'mostrador@dulsys.com' } 
-          },
+          where: { usuarios: { correoelectronico: 'mostrador@dulsys.com' } },
           select: { id_cliente: true }
         });
 
         if (!clienteMostrador) {
-          throw new Error("Error crítico: El cliente 'Venta en Tienda' (mostrador@dulsys.com) no existe en la BD.");
+          throw new Error("Error crítico: El cliente 'Venta en Tienda' no existe.");
         }
-        
         clientePedidoId = clienteMostrador.id_cliente; 
       }
 
-      // 2. Obtener carrito
+      // --- 2. Validar Stock y Preparar Detalles ---
       const itemsDelCarrito = await tx.carrito_items.findMany({
         where: { id_usuario: idUsuarioAuth },
         include: { productos: true }
@@ -570,7 +564,6 @@ app.post('/api/orders', autenticarUsuario, async (req, res) => {
         const producto = item.productos;
         const stockDisponible = producto.stockproductosterminados - BUFFER_EXHIBICION;
 
-        // Validar Stock
         if (item.cantidad > stockDisponible) {
           throw new Error(`¡Stock insuficiente! El producto "${producto.nombre}" solo tiene ${stockDisponible} disponibles.`);
         }
@@ -585,95 +578,78 @@ app.post('/api/orders', autenticarUsuario, async (req, res) => {
         // Descontar Stock
         await tx.productos.update({
           where: { id_producto: item.id_producto },
-          data: { 
-            stockproductosterminados: { 
-              decrement: item.cantidad 
-            } 
-          }
+          data: { stockproductosterminados: { decrement: item.cantidad } }
         });
       }
 
-      // 3. Consumir Recompensa (Solo si es Cliente)
-    const totalPagado = parseFloat(total); 
-
-    if (rolUsuarioAuth === 'Cliente') {
-      // 1. Usamos el ID del nuevo pedido para saber quién compró
-      const idCliente = nuevoPedido.id_cliente;
-      
-      // 2. Revisamos si ya tiene una
-      const recompensaExistente = await prisma.cliente_recompensas.findFirst({
-        where: { id_cliente: idCliente, estado: 'activa' }
-      });
-
-      if (!recompensaExistente) {
-        const reglas = await prisma.recompensas.findMany({
-          where: { activo: true },
-          orderBy: { puntosrequeridos: 'desc' }
-        });
-
-        for (const regla of reglas) {
-          // 3. COMPARACIÓN CLAVE: Lo que pagó vs Lo que requiere la regla
-          if (totalPagado >= parseFloat(regla.puntosrequeridos)) {
-            
-            await prisma.cliente_recompensas.create({
-              data: {
-                id_cliente: idCliente,
-                id_recompensa: regla.id_recompensa,
-                estado: 'activa'
-              }
-            });
-            console.log(`¡Recompensa asignada al cliente ${idCliente}!`); // Log para depurar
-            break; 
-          }
-        }
-      }
-    }
-
+      // --- 3. Crear el Pedido (LO MOVEMOS ANTES DE LAS RECOMPENSAS) ---
       const safeFloat = (valor) => {
         const numero = parseFloat(valor);
         return isNaN(numero) ? 0 : numero;
       };
 
-      // 4. Crear el Pedido (BLINDADO)
-      const pedido = await tx.pedidos.create({
+      const pedidoCreado = await tx.pedidos.create({
         data: {
           id_cliente: clientePedidoId,
           id_empleado: empleadoPedidoId,
-          
           total: safeFloat(total), 
-          
           descuento: safeFloat(descuentoAplicado), 
-          
           estado: estado || 'Pendiente',
           metodo_pago: metodoPago,
-          
-          // Solo guardamos monto si es efectivo, y aseguramos que sea número
           monto_pago_con: metodoPago === 'Efectivo' ? safeFloat(montoPagoCon) : null
         }
       });
 
-      // 5. Guardar Detalles
+      // --- 4. Asignar Recompensa (Solo si es Cliente) ---
+      // CORRECCIÓN: Usamos 'clientePedidoId' que ya definimos arriba, NO 'nuevoPedido'
+      if (rolUsuarioAuth === 'Cliente') {
+        const totalPagado = parseFloat(total); 
+
+        // Revisamos si ya tiene una recompensa activa
+        const recompensaExistente = await tx.cliente_recompensas.findFirst({
+          where: { id_cliente: clientePedidoId, estado: 'activa' }
+        });
+
+        if (!recompensaExistente) {
+          const reglas = await tx.recompensas.findMany({
+            where: { activo: true },
+            orderBy: { puntosrequeridos: 'desc' }
+          });
+
+          for (const regla of reglas) {
+            if (totalPagado >= parseFloat(regla.puntosrequeridos)) {
+              await tx.cliente_recompensas.create({
+                data: {
+                  id_cliente: clientePedidoId, // Usamos la variable local correcta
+                  id_recompensa: regla.id_recompensa,
+                  estado: 'activa'
+                }
+              });
+              console.log(`¡Recompensa asignada al cliente ${clientePedidoId}!`);
+              break; 
+            }
+          }
+        }
+      }
+
+      // --- 5. Guardar Detalles del Pedido ---
       await tx.detalle_pedido.createMany({
-        data: itemsParaDetalle.map(item => ({ ...item, id_pedido: pedido.id_pedido }))
+        data: itemsParaDetalle.map(item => ({ ...item, id_pedido: pedidoCreado.id_pedido }))
       });
 
-      // 6. Limpiar Carrito
+      // --- 6. Limpiar Carrito ---
       await tx.carrito_items.deleteMany({ where: { id_usuario: idUsuarioAuth } });
 
-      return pedido;
+      return pedidoCreado; // Retornamos el pedido creado dentro de la transacción
     });
 
-    // Lógica post-venta de asignar nuevas recompensas (opcional, va aquí)
-
-    res.status(201).json({ id_pedido: nuevoPedido.id_pedido, estado: nuevoPedido.estado });
+    res.status(201).json({ id_pedido: nuevoPedidoResultado.id_pedido, estado: nuevoPedidoResultado.estado });
 
   } catch (error) {
     console.error("Error al crear el pedido:", error);
-    // Usamos handlePrismaError si lo tienes, o el genérico
     res.status(400).json({ error: error.message || 'Error interno del servidor' });
   }
 });
-
 // ============ RUTAS DE GESTIÓN DE PEDIDOS ====================
 // (Accesible por Admin y Cajero)
 
@@ -753,21 +729,39 @@ app.get('/api/admin/orders', autenticarUsuario, esPersonalAutorizado(['Administr
 app.put('/api/admin/orders/:id/status', autenticarUsuario, esPersonalAutorizado(['Administrador', 'Cajero']), async (req, res) => {
   try {
     const { id } = req.params;
-    const { estado } = req.body; // Ej: "Listo" o "En preparación"
+    // Agregamos metodoPago y montoPagoCon a la desestructuración
+    const { estado, metodoPago, montoPagoCon } = req.body; 
 
     if (!estado) {
       return res.status(400).json({ error: 'El campo "estado" es requerido' });
     }
 
-    await prisma.pedidos.update({
+    // Preparamos el objeto de datos dinámicamente
+    const dataUpdate = { estado };
+
+    // Solo actualizamos el pago si nos envían los datos (caso "Procesar Pago")
+    if (metodoPago) {
+      dataUpdate.metodo_pago = metodoPago;
+    }
+    // Validamos que venga el monto y lo convertimos a número
+    if (montoPagoCon !== undefined && montoPagoCon !== null) {
+      dataUpdate.monto_pago_con = parseFloat(montoPagoCon);
+    }
+
+    const pedidoActualizado = await prisma.pedidos.update({
       where: { id_pedido: parseInt(id) },
-      data: { estado: estado }
+      data: dataUpdate
     });
 
-    res.status(200).json({ message: 'Estado actualizado correctamente' });
+    res.status(200).json({ 
+      message: 'Pedido actualizado correctamente', 
+      pedido: pedidoActualizado 
+    });
+
   } catch (error) {
-    console.error("Error al actualizar estado:", error);
-    res.status(500).json({ error: 'Error interno del servidor' });
+    console.error("Error al actualizar pedido:", error);
+    // Usamos tu función handlePrismaError si está disponible en el ámbito, o respuesta genérica
+    res.status(500).json({ error: 'Error interno del servidor al actualizar el pedido' });
   }
 });
 
@@ -1583,8 +1577,6 @@ app.get('/api/admin/dashboard', autenticarUsuario, esAdmin, async (req, res) => 
     const hoy = new Date();
     const inicioDeMes = startOfMonth(hoy);
     const finDeMes = endOfMonth(hoy);
-    const inicioDeSemana = startOfWeek(hoy);
-    const finDeSemana = endOfWeek(hoy);
 
     // --- 1. KPIs (Tarjetas) ---
     const [ventasMes, pedidosTotales, clientesNuevos, productosActivos] = await Promise.all([
@@ -1608,11 +1600,14 @@ app.get('/api/admin/dashboard', autenticarUsuario, esAdmin, async (req, res) => 
       orderBy: { _sum: { cantidad: 'desc' } },
       take: 5,
     });
+    
+    // Obtenemos nombres de productos
     const productoIds = topProductosRaw.map(p => p.id_producto);
     const productosInfo = await prisma.productos.findMany({
       where: { id_producto: { in: productoIds } },
       select: { id_producto: true, nombre: true },
     });
+
     const productosMasVendidos = topProductosRaw.map(p => {
       const info = productosInfo.find(info => info.id_producto === p.id_producto);
       return {
@@ -1621,26 +1616,36 @@ app.get('/api/admin/dashboard', autenticarUsuario, esAdmin, async (req, res) => 
       };
     });
 
-    // --- 3. Gráfico 2: Ventas por Día de la Semana (Líneas) ---
-    const ventasSemanaRaw = await prisma.$queryRaw`
-      SELECT 
-        EXTRACT(DOW FROM fechapedido) as "diaSemana", 
-        SUM(total) as "totalVentas"
-      FROM pedidos
-      WHERE fechapedido BETWEEN ${inicioDeSemana} AND ${finDeSemana}
-      GROUP BY "diaSemana"
-      ORDER BY "diaSemana" ASC;
-    `;
-    const dias = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
-    const ventasPorDia = dias.map((dia, index) => {
-      const dataDelDia = ventasSemanaRaw.find(d => d.diaSemana === index);
-      return {
-        dia: dia,
-        total: dataDelDia ? parseFloat(dataDelDia.totalVentas) : 0
-      };
+    // --- 3. (REEMPLAZO) Gráfico 2: Ventas por Categoría (Dona) ---
+    // Traemos detalles de pedidos completados para calcular categorías
+    const detallesCategorias = await prisma.detalle_pedido.findMany({
+        where: {
+          pedidos: { estado: 'Completado' }
+        },
+        include: {
+          productos: {
+            include: { categorias: true } // Relación con categorías
+          }
+        }
     });
 
-    // --- 4. 🛠️ NUEVO: Gráfico 3: Tamaños Más Vendidos (Pastel) ---
+    // Agrupamos y sumamos en JavaScript
+    const mapaCategorias = {};
+    detallesCategorias.forEach(d => {
+        const nombreCat = d.productos.categorias?.nombrecategoria || 'Otros';
+        if (!mapaCategorias[nombreCat]) {
+          mapaCategorias[nombreCat] = 0;
+        }
+        mapaCategorias[nombreCat] += d.cantidad;
+    });
+
+    // Convertimos a array para el frontend
+    const ventasPorCategoria = Object.keys(mapaCategorias).map(key => ({
+        categoria: key,
+        cantidad: mapaCategorias[key]
+    }));
+
+    // --- 4. Gráfico 3: Tamaños Más Vendidos (Pastel) ---
     const tamanosMasVendidos = await prisma.$queryRaw`
       SELECT 
         (personalizacion->>'Tamaño') as "tamano", 
@@ -1651,7 +1656,7 @@ app.get('/api/admin/dashboard', autenticarUsuario, esAdmin, async (req, res) => 
       ORDER BY "totalVendido" DESC;
     `;
 
-    // --- 5. 🛠️ NUEVO: Gráfico 4: Ventas por Cajero (Barras) ---
+    // --- 5. Gráfico 4: Ventas por Cajero (Barras) ---
     const ventasPorCajero = await prisma.$queryRaw`
       SELECT 
         e.nombrecompleto,
@@ -1669,8 +1674,10 @@ app.get('/api/admin/dashboard', autenticarUsuario, esAdmin, async (req, res) => 
       pedidosTotales: pedidosTotales || 0,
       clientesNuevos: clientesNuevos || 0,
       productosActivos: productosActivos || 0,
+      
       productosMasVendidos: productosMasVendidos,
-      ventasPorDia: ventasPorDia,
+      ventasPorCategoria: ventasPorCategoria, // <--- Dato nuevo enviado correctamente
+      
       tamanosMasVendidos: tamanosMasVendidos.map(t => ({ ...t, totalVendido: Number(t.totalVendido) })),
       ventasPorCajero: ventasPorCajero.map(v => ({ ...v, totalVentas: Number(v.totalVentas) })),
     });
@@ -1687,87 +1694,72 @@ app.get('/api/admin/dashboard', autenticarUsuario, esAdmin, async (req, res) => 
 
 app.get('/api/admin/corte-caja', autenticarUsuario, esPersonalAutorizado(['Administrador', 'Cajero']), async (req, res) => {
   try {
-    // 1. Obtener la fecha de la consulta (o usar 'hoy' por defecto)
-    // El frontend enviará ?fecha=YYYY-MM-DD
     const fechaQuery = req.query.fecha || new Date().toISOString();
     const fecha = parseISO(fechaQuery);
     const inicioDelDia = startOfDay(fecha);
     const finDelDia = endOfDay(fecha);
 
-    // 2. Ejecutar todas las consultas en paralelo
-    const [
-      ventasPorMetodo,
-      productosVendidosRaw,
-      inventarioActual
-    ] = await Promise.all([
-      
-      // -- CONSULTA A: Total de Ventas por Método de Pago --
-      prisma.pedidos.groupBy({
-        by: ['metodo_pago'],
-        _sum: {
-          total: true,
-        },
-        where: {
-          estado: 'Completado', // Solo cuenta pedidos ya pagados
-          fechapedido: {
-            gte: inicioDelDia,
-            lte: finDelDia,
-          },
-        },
-      }),
-
-      // -- CONSULTA B: Lista de Productos Vendidos Hoy --
-      prisma.detalle_pedido.groupBy({
-        by: ['id_producto'],
-        _sum: {
-          cantidad: true,
-          preciounitario: true, // Asumimos que preciounitario ya está guardado
-        },
-        where: {
-          pedidos: { // Filtra por pedidos que SÍ estén completados
-            estado: 'Completado',
-            fechapedido: {
-              gte: inicioDelDia,
-              lte: finDelDia,
-            },
-          },
-        },
-      }),
-
-      // -- CONSULTA C: Stock Actual de Ingredientes --
-      prisma.ingredientes.findMany({
-        where: { activo: true },
-        select: {
-          nombre: true,
-          stockactual: true,
-          stockminimo: true,
-          unidadmedida: true,
-        },
-        orderBy: {
-          stockactual: 'asc', // Muestra los más bajos primero
-        },
-      })
-    ]);
-
-    // 3. Formatear los datos de Productos Vendidos (añadir nombres)
-    const productoIds = productosVendidosRaw.map(p => p.id_producto);
-    const productosInfo = await prisma.productos.findMany({
-      where: { id_producto: { in: productoIds } },
-      select: { id_producto: true, nombre: true }
+    // 1. Ejecutar consultas
+    // CONSULTA A: Dinero real en caja (Ventas Netas)
+    // Esta consulta considera los descuentos globales del pedido porque suma el 'total' final.
+    const ventasPorMetodo = await prisma.pedidos.groupBy({
+      by: ['metodo_pago'],
+      _sum: { total: true },
+      where: {
+        estado: 'Completado',
+        fechapedido: { gte: inicioDelDia, lte: finDelDia },
+      },
     });
 
-    const productosVendidos = productosVendidosRaw.map(p => {
-      const info = productosInfo.find(i => i.id_producto === p.id_producto);
-      return {
-        id: p.id_producto,
-        nombre: info ? info.nombre : 'Producto Borrado',
-        cantidad: p._sum.cantidad || 0,
-        precioUnitario: p._sum.preciounitario || 0,
-        total: (p._sum.cantidad || 0) * (p._sum.preciounitario || 0)
-      };
+    // CONSULTA B: Detalle de productos vendidos
+    // Usamos findMany para obtener cada línea de venta y calcular con precisión
+    const detallesVentas = await prisma.detalle_pedido.findMany({
+      where: {
+        pedidos: {
+          estado: 'Completado',
+          fechapedido: { gte: inicioDelDia, lte: finDelDia },
+        }
+      },
+      include: {
+        productos: { select: { nombre: true } } // Traemos el nombre directamente
+      }
     });
 
-    // 4. Enviar el reporte completo
+    // Procesamiento en JS para agrupar por producto correctamente
+    const mapaProductos = {};
+
+    detallesVentas.forEach(detalle => {
+      const id = detalle.id_producto;
+      const totalLinea = detalle.cantidad * parseFloat(detalle.preciounitario);
+
+      if (!mapaProductos[id]) {
+        mapaProductos[id] = {
+          id: id,
+          nombre: detalle.productos?.nombre || 'Producto Eliminado',
+          cantidad: 0,
+          total: 0
+        };
+      }
+
+      mapaProductos[id].cantidad += detalle.cantidad;
+      mapaProductos[id].total += totalLinea;
+    });
+
+    // Convertimos el objeto a array
+    const productosVendidos = Object.values(mapaProductos);
+
+    // CONSULTA C: Inventario (Sin cambios)
+    const inventarioActual = await prisma.ingredientes.findMany({
+      where: { activo: true },
+      select: {
+        nombre: true,
+        stockactual: true,
+        stockminimo: true,
+        unidadmedida: true,
+      },
+      orderBy: { stockactual: 'asc' },
+    });
+
     res.json({
       ventasPorMetodo,
       productosVendidos,

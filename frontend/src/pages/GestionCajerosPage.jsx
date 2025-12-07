@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import apiClient from '../api';
+import toast from 'react-hot-toast';
 
 function CajeroModal({ isOpen, onClose, onSave, cajero }) {
   const [formData, setFormData] = useState({ nombrecompleto: '', correoelectronico: '', contrasena: '', turno: 'Matutino' });
@@ -80,8 +81,10 @@ function GestionCajerosPage() {
     try {
       if (isEditMode) {
         await apiClient.put(`/admin/cashiers/${cajeroId}`, formData);
+        toast.success("Cajero actualizado correctamente");
       } else {
         await apiClient.post('/admin/cashiers', formData);
+        toast.success("Cajero agregado correctamente");
       }
       fetchCajeros();
       handleCloseModal();
@@ -90,16 +93,43 @@ function GestionCajerosPage() {
       alert(error.response?.data?.error || "Error al guardar cajero");
     }
   };
-  const handleDeleteCajero = async (cajeroId) => {
-    if (window.confirm("¿Estás seguro de que quieres eliminar este cajero?")) {
-      try {
-        await apiClient.delete(`/admin/cashiers/${cajeroId}`);
-        fetchCajeros();
-      } catch (error) {
-        console.error("Error al eliminar cajero:", error);
-        alert(error.response?.data?.error || "Error al eliminar cajero");
-      }
-    }
+  const handleDeleteCajero = (cajeroId) => {
+    toast((t) => (
+      <div className="flex flex-col gap-2">
+        <p className="font-medium text-gray-800">
+          ¿Estás seguro de eliminar a este cajero?
+        </p>
+        <div className="flex justify-end gap-2 mt-1">
+          <button
+            onClick={() => toast.dismiss(t.id)}
+            className="px-3 py-1 text-sm text-gray-600 bg-gray-200 rounded hover:bg-gray-300 transition"
+          >
+            Cancelar
+          </button>
+          <button
+            onClick={async () => {
+              toast.dismiss(t.id);
+              try {
+                // Endpoint verificado en tu backend (index.js)
+                await apiClient.delete(`/admin/cashiers/${cajeroId}`); 
+                toast.success("Cajero eliminado correctamente");
+                fetchCajeros(); // Recarga la tabla
+              } catch (error) {
+                console.error(error);
+                toast.error("Error al eliminar el cajero");
+              }
+            }}
+            className="px-3 py-1 text-sm text-white bg-red-500 rounded hover:bg-red-600 transition"
+          >
+            Sí, eliminar
+          </button>
+        </div>
+      </div>
+    ), {
+      duration: Infinity,
+      position: 'top-center',
+      style: { border: '1px solid #E5E7EB', padding: '16px' },
+    });
   };
 
   // 2. Lógica de filtrado

@@ -199,16 +199,52 @@ function GestionClientesPage() {
     }
   };
 
-  const handleDeleteCliente = async (clienteId) => {
-    if (window.confirm("¿Estás seguro de que quieres desactivar este cliente?")) {
-      try {
-        await apiClient.delete(`/admin/clients/${clienteId}`);
-        toast.success("Cliente eliminado correctamente");
-        fetchClientes(); 
-      } catch (error) {
-        // El interceptor maneja el error
-      }
-    }
+  const handleDeleteCliente = (clienteId) => {
+    // En lugar de window.confirm, lanzamos un toast personalizado
+    toast((t) => (
+      <div className="flex flex-col gap-2">
+        <p className="font-medium text-gray-800">
+          ¿Estás seguro de eliminar a este cliente?
+        </p>
+        <div className="flex justify-end gap-2 mt-1">
+          {/* Botón CANCELAR */}
+          <button
+            onClick={() => toast.dismiss(t.id)}
+            className="px-3 py-1 text-sm text-gray-600 bg-gray-200 rounded hover:bg-gray-300 transition"
+          >
+            Cancelar
+          </button>
+
+          {/* Botón CONFIRMAR */}
+          <button
+            onClick={async () => {
+              toast.dismiss(t.id); // Cierra el toast de pregunta
+              try {
+                // 1. Llamada a la API
+                await apiClient.delete(`/admin/clients/${clienteId}`);
+                // 2. Mensaje de éxito
+                toast.success("Cliente eliminado correctamente");
+                // 3. Recargar tabla
+                fetchClientes(); 
+              } catch (error) {
+                console.error(error);
+                toast.error("Error al eliminar");
+              }
+            }}
+            className="px-3 py-1 text-sm text-white bg-red-500 rounded hover:bg-red-600 transition"
+          >
+            Sí, eliminar
+          </button>
+        </div>
+      </div>
+    ), {
+      duration: Infinity, // Que no desaparezca solo
+      position: 'top-center', // Opcional: Para que salga al centro arriba
+      style: {
+        border: '1px solid #E5E7EB',
+        padding: '16px',
+      },
+    });
   };
 
   // --- Lógica de Búsqueda ---
