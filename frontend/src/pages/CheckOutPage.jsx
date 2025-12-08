@@ -7,7 +7,7 @@ import toast from 'react-hot-toast';
 
 function CheckoutPage() {
   const navigate = useNavigate();
-  const { totalFinal, clearLocalCart } = useCart();
+  const { totalFinal, descuento, clearLocalCart } = useCart();
   const { user } = useAuth();
   
   const [metodoPago, setMetodoPago] = useState(null);
@@ -34,6 +34,11 @@ function CheckoutPage() {
         toast.error(`El monto a pagar ($${montoNum.toFixed(2)}) es menor al total ($${totalNum.toFixed(2)}).`);
         return;
       }
+
+      if (montoNum > 100000) {
+        toast.error("El monto máximo permitido es $100,000.00.");
+        return;
+      }
     }
 
     setLoading(true);
@@ -44,6 +49,7 @@ function CheckoutPage() {
         metodoPago: metodoPago,
         montoPagoCon: metodoPago === 'Efectivo' ? parseFloat(montoPagoCon) : null,
         total: totalFinal, 
+        descuentoAplicado: descuento,
         estado: esCajero ? 'Completado' : undefined 
       };
 
@@ -62,7 +68,6 @@ function CheckoutPage() {
 
       // 3. Redirección y Mensaje de Éxito
       if (esCajero) {
-        // 🛠️ Ahora sí funcionará porque importamos 'toast'
         toast.success(`¡Venta en tienda #${orderId} completada con éxito!`);
         navigate('/gestion/pedidos'); 
       } else {
@@ -72,7 +77,6 @@ function CheckoutPage() {
 
     } catch (err) {
       console.error("Error al finalizar el checkout:", err);
-      // Si es un error de JS local (como el que tenías), mostramos esto:
       if (!err.response) {
         toast.error("Ocurrió un error inesperado en la aplicación.");
       }
